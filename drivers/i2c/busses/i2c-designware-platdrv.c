@@ -34,6 +34,7 @@
 #include <linux/sched.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
+#include <linux/of.h>
 #include <linux/of_i2c.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
@@ -42,6 +43,10 @@
 #include <linux/slab.h>
 #include <linux/acpi.h>
 #include "i2c-designware-core.h"
+
+static bool force_std_mode;
+module_param(force_std_mode, bool, 0);
+MODULE_PARM_DESC(force_std_mode, "Force standard mode (100 kHz)");
 
 static struct i2c_algorithm i2c_dw_algo = {
 	.master_xfer	= i2c_dw_xfer,
@@ -53,9 +58,33 @@ static u32 i2c_dw_get_clk_rate_khz(struct dw_i2c_dev *dev)
 }
 
 #ifdef CONFIG_ACPI
+static void dw_i2c_acpi_params(struct platform_device *pdev, char method[],
+			       u16 *hcnt, u16 *lcnt, u32 *sda_hold)
+{
+	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER };
+	acpi_handle handle = ACPI_HANDLE(&pdev->dev);
+	union acpi_object *obj;
+
+	if (ACPI_FAILURE(acpi_evaluate_object(handle, method, NULL, &buf)))
+		return;
+
+	obj = (union acpi_object *)buf.pointer;
+	if (obj->type == ACPI_TYPE_PACKAGE && obj->package.count == 3) {
+		const union acpi_object *objs = obj->package.elements;
+
+		*hcnt = (u16)objs[0].integer.value;
+		*lcnt = (u16)objs[1].integer.value;
+		if (sda_hold)
+			*sda_hold = (u32)objs[2].integer.value;
+	}
+
+	kfree(buf.pointer);
+}
+
 static int dw_i2c_acpi_configure(struct platform_device *pdev)
 {
 	struct dw_i2c_dev *dev = platform_get_drvdata(pdev);
+	bool fs_mode = dev->master_cfg & DW_IC_CON_SPEED_FAST;
 
 	if (!ACPI_HANDLE(&pdev->dev))
 		return -ENODEV;
@@ -63,6 +92,16 @@ static int dw_i2c_acpi_configure(struct platform_device *pdev)
 	dev->adapter.nr = -1;
 	dev->tx_fifo_depth = 32;
 	dev->rx_fifo_depth = 32;
+
+	/*
+	 * Try to get SDA hold time and *CNT values from an ACPI method if
+	 * it exists for both supported speed modes.
+	 */
+	dw_i2c_acpi_params(pdev, "SSCN", &dev->ss_hcnt, &dev->ss_lcnt,
+			   fs_mode ? NULL : &dev->sda_hold_time);
+	dw_i2c_acpi_params(pdev, "FMCN", &dev->fs_hcnt, &dev->fs_lcnt,
+			   fs_mode ? &dev->sda_hold_time : NULL);
+
 	return 0;
 }
 
@@ -121,6 +160,15 @@ static int dw_i2c_probe(struct platform_device *pdev)
 		return PTR_ERR(dev->clk);
 	clk_prepare_enable(dev->clk);
 
+	if (pdev->dev.of_node) {
+		u32 ht = 0;
+		u32 ic_clk = dev->get_clk_rate_khz(dev);
+
+		of_property_read_u32(pdev->dev.of_node,
+					"i2c-sda-hold-time-ns", &ht);
+		dev->sda_hold_time = ((u64)ic_clk * ht + 500000) / 1000000;
+	}
+
 	dev->functionality =
 		I2C_FUNC_I2C |
 		I2C_FUNC_10BIT_ADDR |
@@ -129,7 +177,7 @@ static int dw_i2c_probe(struct platform_device *pdev)
 		I2C_FUNC_SMBUS_WORD_DATA |
 		I2C_FUNC_SMBUS_I2C_BLOCK;
 	dev->master_cfg =  DW_IC_CON_MASTER | DW_IC_CON_SLAVE_DISABLE |
-		DW_IC_CON_RESTART_EN | DW_IC_CON_SPEED_FAST;
+		DW_IC_CON_RESTART_EN | DW_IC_CON_SPEED_STD;
 
 	/* Try first if we can configure the device from ACPI */
 	r = dw_i2c_acpi_configure(pdev);
