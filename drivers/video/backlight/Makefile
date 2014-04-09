@@ -3,6 +3,7 @@
 obj-$(CONFIG_LCD_AMS369FG06)		+= ams369fg06.o
 obj-$(CONFIG_LCD_CLASS_DEVICE)		+= lcd.o
 obj-$(CONFIG_LCD_CORGI)			+= corgi_lcd.o
+obj-$(CONFIG_BACKLIGHT_CHROMEOS_KEYBOARD) += chromeos_keyboard_bl.o
 obj-$(CONFIG_LCD_HP700)			+= jornada720_lcd.o
 obj-$(CONFIG_LCD_HX8357)		+= hx8357.o
 obj-$(CONFIG_LCD_ILI922X)		+= ili922x.o
@@ -17,7 +18,6 @@ obj-$(CONFIG_LCD_S6E63M0)		+= s6e63m0.o
 obj-$(CONFIG_LCD_TDO24M)		+= tdo24m.o
 obj-$(CONFIG_LCD_TOSA)			+= tosa_lcd.o
 obj-$(CONFIG_LCD_VGG2432A4)		+= vgg2432a4.o
-
 obj-$(CONFIG_BACKLIGHT_88PM860X)	+= 88pm860x_bl.o
 obj-$(CONFIG_BACKLIGHT_AAT2870)		+= aat2870_bl.o
 obj-$(CONFIG_BACKLIGHT_ADP5520)		+= adp5520_bl.o
