@@ -369,8 +369,7 @@ LINUXINCLUDE    := \
 
 
 ifneq ($(WIFIVERSION),)
-LINUXINCLUDE := -I$(srctree)/include/wireless$(WIFIVERSION)
-$(LINUXINCLUDE)
+LINUXINCLUDE := -I$(srctree)/include/wireless$(WIFIVERSION) $(LINUXINCLUDE)
 endif
 
 
