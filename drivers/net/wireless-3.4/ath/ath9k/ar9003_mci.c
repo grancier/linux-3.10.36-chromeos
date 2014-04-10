@@ -330,6 +330,7 @@ void ar9003_mci_set_full_sleep(struct ath_hw *ah)
 	}
 
 	mci->ready = false;
+	REG_WRITE(ah, AR_RTC_KEEP_AWAKE, 0x2);
 }
 
 static void ar9003_mci_disable_interrupt(struct ath_hw *ah)
@@ -755,7 +756,7 @@ int ar9003_mci_end_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 		if (caldata) {
 			caldata->done_txiqcal_once = false;
 			caldata->done_txclcal_once = false;
-			caldata->rtt_done = false;
+			caldata->rtt_hist.num_readings = 0;
 		}
 
 		if (!ath9k_hw_init_cal(ah, chan))

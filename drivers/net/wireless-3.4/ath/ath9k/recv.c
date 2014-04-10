@@ -78,8 +78,6 @@ static void ath_rx_buf_link(struct ath_softc *sc, struct ath_buf *bf)
 	struct ath_desc *ds;
 	struct sk_buff *skb;
 
-	ATH_RXBUF_RESET(bf);
-
 	ds = bf->bf_desc;
 	ds->ds_link = 0; /* link to null */
 	ds->ds_data = bf->bf_buf_addr;
@@ -104,6 +102,14 @@ static void ath_rx_buf_link(struct ath_softc *sc, struct ath_buf *bf)
 		*sc->rx.rxlink = bf->bf_daddr;
 
 	sc->rx.rxlink = &ds->ds_link;
+}
+
+static void ath_rx_buf_relink(struct ath_softc *sc, struct ath_buf *bf)
+{
+	if (sc->rx.buf_hold)
+		ath_rx_buf_link(sc, sc->rx.buf_hold);
+
+	sc->rx.buf_hold = bf;
 }
 
 static void ath_setdefantenna(struct ath_softc *sc, u32 antenna)
@@ -153,7 +159,6 @@ static bool ath_rx_edma_buf_link(struct ath_softc *sc,
 
 	skb = bf->bf_mpdu;
 
-	ATH_RXBUF_RESET(bf);
 	memset(skb->data, 0, ah->caps.rx_status_len);
 	dma_sync_single_for_device(sc->dev, bf->bf_buf_addr,
 				ah->caps.rx_status_len, DMA_TO_DEVICE);
@@ -485,6 +490,7 @@ int ath_startrecv(struct ath_softc *sc)
 	if (list_empty(&sc->rx.rxbuf))
 		goto start_recv;
 
+	sc->rx.buf_hold = NULL;
 	sc->rx.rxlink = NULL;
 	list_for_each_entry_safe(bf, tbf, &sc->rx.rxbuf, list) {
 		ath_rx_buf_link(sc, bf);
@@ -624,13 +630,13 @@ static void ath_rx_ps(struct ath_softc *sc, struct sk_buff *skb, bool mybeacon)
 
 	/* Process Beacon and CAB receive in PS state */
 	if (((sc->ps_flags & PS_WAIT_FOR_BEACON) || ath9k_check_auto_sleep(sc))
-	    && mybeacon) {
+	    && mybeacon)
 		ath_rx_ps_beacon(sc, skb);
-	} else if ((sc->ps_flags & PS_WAIT_FOR_CAB) &&
-		   (ieee80211_is_data(hdr->frame_control) ||
-		    ieee80211_is_action(hdr->frame_control)) &&
-		   is_multicast_ether_addr(hdr->addr1) &&
-		   !ieee80211_has_moredata(hdr->frame_control)) {
+	else if ((sc->ps_flags & PS_WAIT_FOR_CAB) &&
+		 (ieee80211_is_data(hdr->frame_control) ||
+		  ieee80211_is_action(hdr->frame_control)) &&
+		 is_multicast_ether_addr(hdr->addr1) &&
+		 !ieee80211_has_moredata(hdr->frame_control)) {
 		/*
 		 * No more broadcast/multicast frames to be received at this
 		 * point.
@@ -734,6 +740,9 @@ static struct ath_buf *ath_get_next_rx_buf(struct ath_softc *sc,
 	}
 
 	bf = list_first_entry(&sc->rx.rxbuf, struct ath_buf, list);
+	if (bf == sc->rx.buf_hold)
+		return NULL;
+
 	ds = bf->bf_desc;
 
 	/*
@@ -778,6 +787,7 @@ static struct ath_buf *ath_get_next_rx_buf(struct ath_softc *sc,
 			return NULL;
 	}
 
+	list_del(&bf->list);
 	if (!bf->bf_mpdu)
 		return bf;
 
@@ -812,7 +822,6 @@ static bool ath9k_rx_accept(struct ath_common *common,
 	is_valid_tkip = rx_stats->rs_keyix != ATH9K_RXKEYIX_INVALID &&
 		test_bit(rx_stats->rs_keyix, common->tkip_keymap);
 	strip_mic = is_valid_tkip && ieee80211_is_data(fc) &&
-		ieee80211_has_protected(fc) &&
 		!(rx_stats->rs_status &
 		(ATH9K_RXERR_DECRYPT | ATH9K_RXERR_CRC | ATH9K_RXERR_MIC |
 		 ATH9K_RXERR_KEYMISS));
@@ -1843,9 +1852,6 @@ int ath_rx_tasklet(struct ath_softc *sc, int flush, bool hp)
 
 		memset(rxs, 0, sizeof(struct ieee80211_rx_status));
 
-		if (rs.is_mybeacon && !flush)
-			ath_start_rx_poll(sc, 300);
-
 		rxs->mactime = (tsf & ~0xffffffffULL) | rs.rs_tstamp;
 		if (rs.rs_tstamp > tsf_lower &&
 		    unlikely(rs.rs_tstamp - tsf_lower > 0x10000000))
@@ -1951,6 +1957,7 @@ int ath_rx_tasklet(struct ath_softc *sc, int flush, bool hp)
 			skb_trim(skb, skb->len - 8);
 
 		spin_lock_irqsave(&sc->sc_pm_lock, flags);
+
 		if ((sc->ps_flags & (PS_WAIT_FOR_BEACON |
 				     PS_WAIT_FOR_CAB |
 				     PS_WAIT_FOR_PSPOLL_DATA)) ||
@@ -1969,14 +1976,15 @@ requeue_drop_frag:
 			sc->rx.frag = NULL;
 		}
 requeue:
+		list_add_tail(&bf->list, &sc->rx.rxbuf);
+		if (flush)
+			continue;
+
 		if (edma) {
-			list_add_tail(&bf->list, &sc->rx.rxbuf);
 			ath_rx_edma_buf_link(sc, qtype);
 		} else {
-			list_move_tail(&bf->list, &sc->rx.rxbuf);
-			ath_rx_buf_link(sc, bf);
-			if (!flush)
-				ath9k_hw_rxena(ah);
+			ath_rx_buf_relink(sc, bf);
+			ath9k_hw_rxena(ah);
 		}
 	} while (1);
 

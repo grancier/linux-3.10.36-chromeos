@@ -43,11 +43,11 @@ static const struct ani_ofdm_level_entry ofdm_level_table[] = {
 	{  2,  2,  1  }, /* lvl 2 */
 	{  3,  2,  1  }, /* lvl 3  (default) */
 	{  4,  3,  1  }, /* lvl 4 */
-	{  4,  3,  1  }, /* lvl 5 */
-	{  5,  4,  1  }, /* lvl 6 */
-	{  6,  5,  0  }, /* lvl 7 */
-	{  7,  6,  0  }, /* lvl 8 */
-	{  7,  7,  0  }, /* lvl 9 */
+	{  5,  4,  1  }, /* lvl 5 */
+	{  6,  5,  1  }, /* lvl 6 */
+	{  7,  6,  1  }, /* lvl 7 */
+	{  7,  7,  1  }, /* lvl 8 */
+	{  7,  8,  0  }  /* lvl 9 */
 };
 #define ATH9K_ANI_OFDM_NUM_LEVEL \
 	ARRAY_SIZE(ofdm_level_table)
@@ -91,8 +91,8 @@ static const struct ani_cck_level_entry cck_level_table[] = {
 	{  4,  0  }, /* lvl 4 */
 	{  5,  0  }, /* lvl 5 */
 	{  6,  0  }, /* lvl 6 */
-	{  6,  0  }, /* lvl 7 (only for high rssi) */
-	{  7,  0  }  /* lvl 8 (only for high rssi) */
+	{  7,  0  }, /* lvl 7 (only for high rssi) */
+	{  8,  0  }  /* lvl 8 (only for high rssi) */
 };
 
 #define ATH9K_ANI_CCK_NUM_LEVEL \
@@ -259,8 +259,7 @@ static void ath9k_hw_ani_cck_err_trigger_old(struct ath_hw *ah)
 }
 
 /* Adjust the OFDM Noise Immunity Level */
-static void ath9k_hw_set_ofdm_nil(struct ath_hw *ah, u8 immunityLevel,
-				  bool scan)
+static void ath9k_hw_set_ofdm_nil(struct ath_hw *ah, u8 immunityLevel)
 {
 	struct ar5416AniState *aniState = &ah->curchan->ani;
 	struct ath_common *common = ath9k_hw_common(ah);
@@ -274,7 +273,7 @@ static void ath9k_hw_set_ofdm_nil(struct ath_hw *ah, u8 immunityLevel,
 		immunityLevel, aniState->noiseFloor,
 		aniState->rssiThrLow, aniState->rssiThrHigh);
 
-	if (!scan)
+	if (aniState->update_ani)
 		aniState->ofdmNoiseImmunityLevel = immunityLevel;
 
 	entry_ofdm = &ofdm_level_table[aniState->ofdmNoiseImmunityLevel];
@@ -291,12 +290,20 @@ static void ath9k_hw_set_ofdm_nil(struct ath_hw *ah, u8 immunityLevel,
 				     ATH9K_ANI_FIRSTEP_LEVEL,
 				     entry_ofdm->fir_step_level);
 
-	if ((aniState->noiseFloor >= aniState->rssiThrHigh) &&
-	    (!aniState->ofdmWeakSigDetectOff !=
-	     entry_ofdm->ofdm_weak_signal_on))
-		ath9k_hw_ani_control(ah,
+	if ((ah->opmode != NL80211_IFTYPE_STATION &&
+	     ah->opmode != NL80211_IFTYPE_ADHOC) ||
+	    aniState->noiseFloor <= aniState->rssiThrHigh) {
+		if (aniState->ofdmWeakSigDetectOff)
+			/* force on ofdm weak sig detect */
+			ath9k_hw_ani_control(ah,
+				ATH9K_ANI_OFDM_WEAK_SIGNAL_DETECTION,
+					     true);
+		else if (aniState->ofdmWeakSigDetectOff ==
+			 entry_ofdm->ofdm_weak_signal_on)
+			ath9k_hw_ani_control(ah,
 				ATH9K_ANI_OFDM_WEAK_SIGNAL_DETECTION,
 				entry_ofdm->ofdm_weak_signal_on);
+	}
 }
 
 static void ath9k_hw_ani_ofdm_err_trigger(struct ath_hw *ah)
@@ -314,15 +321,13 @@ static void ath9k_hw_ani_ofdm_err_trigger(struct ath_hw *ah)
 	aniState = &ah->curchan->ani;
 
 	if (aniState->ofdmNoiseImmunityLevel < ATH9K_ANI_OFDM_MAX_LEVEL)
-		ath9k_hw_set_ofdm_nil(ah, aniState->ofdmNoiseImmunityLevel + 1,
-				      false);
+		ath9k_hw_set_ofdm_nil(ah, aniState->ofdmNoiseImmunityLevel + 1);
 }
 
 /*
  * Set the ANI settings to match an CCK level.
  */
-static void ath9k_hw_set_cck_nil(struct ath_hw *ah, u_int8_t immunityLevel,
-				 bool scan)
+static void ath9k_hw_set_cck_nil(struct ath_hw *ah, u_int8_t immunityLevel)
 {
 	struct ar5416AniState *aniState = &ah->curchan->ani;
 	struct ath_common *common = ath9k_hw_common(ah);
@@ -341,7 +346,7 @@ static void ath9k_hw_set_cck_nil(struct ath_hw *ah, u_int8_t immunityLevel,
 	    immunityLevel > ATH9K_ANI_CCK_MAX_LEVEL_LOW_RSSI)
 		immunityLevel = ATH9K_ANI_CCK_MAX_LEVEL_LOW_RSSI;
 
-	if (!scan)
+	if (aniState->update_ani)
 		aniState->cckNoiseImmunityLevel = immunityLevel;
 
 	entry_ofdm = &ofdm_level_table[aniState->ofdmNoiseImmunityLevel];
@@ -378,8 +383,7 @@ static void ath9k_hw_ani_cck_err_trigger(struct ath_hw *ah)
 	aniState = &ah->curchan->ani;
 
 	if (aniState->cckNoiseImmunityLevel < ATH9K_ANI_CCK_MAX_LEVEL)
-		ath9k_hw_set_cck_nil(ah, aniState->cckNoiseImmunityLevel + 1,
-				     false);
+		ath9k_hw_set_cck_nil(ah, aniState->cckNoiseImmunityLevel + 1);
 }
 
 static void ath9k_hw_ani_lower_immunity_old(struct ath_hw *ah)
@@ -453,15 +457,13 @@ static void ath9k_hw_ani_lower_immunity(struct ath_hw *ah)
 	/* lower OFDM noise immunity */
 	if (aniState->ofdmNoiseImmunityLevel > 0 &&
 	    (aniState->ofdmsTurn || aniState->cckNoiseImmunityLevel == 0)) {
-		ath9k_hw_set_ofdm_nil(ah, aniState->ofdmNoiseImmunityLevel - 1,
-				      false);
+		ath9k_hw_set_ofdm_nil(ah, aniState->ofdmNoiseImmunityLevel - 1);
 		return;
 	}
 
 	/* lower CCK noise immunity */
 	if (aniState->cckNoiseImmunityLevel > 0)
-		ath9k_hw_set_cck_nil(ah, aniState->cckNoiseImmunityLevel - 1,
-				     false);
+		ath9k_hw_set_cck_nil(ah, aniState->cckNoiseImmunityLevel - 1);
 }
 
 static void ath9k_ani_reset_old(struct ath_hw *ah, bool is_scanning)
@@ -540,7 +542,6 @@ void ath9k_ani_reset(struct ath_hw *ah, bool is_scanning)
 	struct ar5416AniState *aniState = &ah->curchan->ani;
 	struct ath9k_channel *chan = ah->curchan;
 	struct ath_common *common = ath9k_hw_common(ah);
-	int ofdm_nil, cck_nil;
 
 	if (!DO_ANI(ah))
 		return;
@@ -565,11 +566,6 @@ void ath9k_ani_reset(struct ath_hw *ah, bool is_scanning)
 	/* always allow mode (on/off) to be controlled */
 	ah->ani_function |= ATH9K_ANI_MODE;
 
-	ofdm_nil = max_t(int, ATH9K_ANI_OFDM_DEF_LEVEL,
-			 aniState->ofdmNoiseImmunityLevel);
-	cck_nil = max_t(int, ATH9K_ANI_CCK_DEF_LEVEL,
-			aniState->cckNoiseImmunityLevel);
-
 	if (is_scanning ||
 	    (ah->opmode != NL80211_IFTYPE_STATION &&
 	     ah->opmode != NL80211_IFTYPE_ADHOC)) {
@@ -592,8 +588,9 @@ void ath9k_ani_reset(struct ath_hw *ah, bool is_scanning)
 				aniState->ofdmNoiseImmunityLevel,
 				aniState->cckNoiseImmunityLevel);
 
-			ofdm_nil = ATH9K_ANI_OFDM_DEF_LEVEL;
-			cck_nil = ATH9K_ANI_CCK_DEF_LEVEL;
+			aniState->update_ani = false;
+			ath9k_hw_set_ofdm_nil(ah, ATH9K_ANI_OFDM_DEF_LEVEL);
+			ath9k_hw_set_cck_nil(ah, ATH9K_ANI_CCK_DEF_LEVEL);
 		}
 	} else {
 		/*
@@ -607,9 +604,13 @@ void ath9k_ani_reset(struct ath_hw *ah, bool is_scanning)
 			is_scanning,
 			aniState->ofdmNoiseImmunityLevel,
 			aniState->cckNoiseImmunityLevel);
+
+			aniState->update_ani = true;
+			ath9k_hw_set_ofdm_nil(ah,
+					      aniState->ofdmNoiseImmunityLevel);
+			ath9k_hw_set_cck_nil(ah,
+					     aniState->cckNoiseImmunityLevel);
 	}
-	ath9k_hw_set_ofdm_nil(ah, ofdm_nil, is_scanning);
-	ath9k_hw_set_cck_nil(ah, cck_nil, is_scanning);
 
 	/*
 	 * enable phy counters if hw supports or if not, enable phy
@@ -715,30 +716,27 @@ void ath9k_hw_ani_monitor(struct ath_hw *ah, struct ath9k_channel *chan)
 		aniState->ofdmNoiseImmunityLevel,
 		ofdmPhyErrRate, aniState->cckNoiseImmunityLevel,
 		cckPhyErrRate, aniState->ofdmsTurn);
-	if (aniState->listenTime > ah->aniperiod) {
-		if (cckPhyErrRate < ah->config.cck_trig_low &&
-		    ((ofdmPhyErrRate < ah->config.ofdm_trig_low &&
-		      aniState->ofdmNoiseImmunityLevel <
-		      ATH9K_ANI_OFDM_DEF_LEVEL) ||
-		     (ofdmPhyErrRate < ATH9K_ANI_OFDM_TRIG_LOW_ABOVE_INI &&
-		      aniState->ofdmNoiseImmunityLevel >=
-		      ATH9K_ANI_OFDM_DEF_LEVEL))) {
+
+	if (aniState->listenTime > 5 * ah->aniperiod) {
+		if (ofdmPhyErrRate <= ah->config.ofdm_trig_low &&
+		    cckPhyErrRate <= ah->config.cck_trig_low) {
 			ath9k_hw_ani_lower_immunity(ah);
 			aniState->ofdmsTurn = !aniState->ofdmsTurn;
-		} else if ((ofdmPhyErrRate > ah->config.ofdm_trig_high &&
-			    aniState->ofdmNoiseImmunityLevel >=
-			    ATH9K_ANI_OFDM_DEF_LEVEL) ||
-			   (ofdmPhyErrRate >
-			    ATH9K_ANI_OFDM_TRIG_HIGH_BELOW_INI &&
-			    aniState->ofdmNoiseImmunityLevel <
-			    ATH9K_ANI_OFDM_DEF_LEVEL)) {
+		}
+		ath9k_ani_restart(ah);
+	} else if (aniState->listenTime > ah->aniperiod) {
+		/* check to see if need to raise immunity */
+		if (ofdmPhyErrRate > ah->config.ofdm_trig_high &&
+		    (cckPhyErrRate <= ah->config.cck_trig_high ||
+		     aniState->ofdmsTurn)) {
 			ath9k_hw_ani_ofdm_err_trigger(ah);
+			ath9k_ani_restart(ah);
 			aniState->ofdmsTurn = false;
 		} else if (cckPhyErrRate > ah->config.cck_trig_high) {
 			ath9k_hw_ani_cck_err_trigger(ah);
+			ath9k_ani_restart(ah);
 			aniState->ofdmsTurn = true;
 		}
-		ath9k_ani_restart(ah);
 	}
 }
 EXPORT_SYMBOL(ath9k_hw_ani_monitor);
@@ -892,6 +890,7 @@ void ath9k_hw_ani_init(struct ath_hw *ah)
 			!ATH9K_ANI_USE_OFDM_WEAK_SIG;
 		ani->cckNoiseImmunityLevel = ATH9K_ANI_CCK_DEF_LEVEL;
 		ani->ofdmNoiseImmunityLevel = ATH9K_ANI_OFDM_DEF_LEVEL;
+		ani->update_ani = false;
 	}
 
 	/*

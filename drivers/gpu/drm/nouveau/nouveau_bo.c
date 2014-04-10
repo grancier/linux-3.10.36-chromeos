@@ -146,8 +146,9 @@ nouveau_bo_del_ttm(struct ttm_buffer_object *bo)
 	struct drm_device *dev = drm->dev;
 	struct nouveau_bo *nvbo = nouveau_bo(bo);
 
-	if (unlikely(nvbo->gem))
+	if (unlikely(nvbo->gem.filp))
 		DRM_ERROR("bo %p still attached to GEM object\n", bo);
+	WARN_ON(nvbo->pin_refcnt > 0);
 	nv10_bo_put_tile_region(dev, nvbo->tile, NULL);
 	kfree(nvbo);
 }
@@ -340,13 +341,15 @@ nouveau_bo_unpin(struct nouveau_bo *nvbo)
 {
 	struct nouveau_drm *drm = nouveau_bdev(nvbo->bo.bdev);
 	struct ttm_buffer_object *bo = &nvbo->bo;
-	int ret;
+	int ret, ref;
 
 	ret = ttm_bo_reserve(bo, false, false, false, 0);
 	if (ret)
 		return ret;
 
-	if (--nvbo->pin_refcnt)
+	ref = --nvbo->pin_refcnt;
+	WARN_ON_ONCE(ref < 0);
+	if (ref)
 		goto out;
 
 	nouveau_bo_placement_set(nvbo, bo->mem.placement, 0);
@@ -788,25 +791,25 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 		  struct ttm_mem_reg *old_mem, struct ttm_mem_reg *new_mem)
 {
 	struct nouveau_mem *node = old_mem->mm_node;
+	struct nouveau_bo *nvbo = nouveau_bo(bo);
 	u64 length = (new_mem->num_pages << PAGE_SHIFT);
 	u64 src_offset = node->vma[0].offset;
 	u64 dst_offset = node->vma[1].offset;
-	int src_tiled = !!node->memtype;
-	int dst_tiled = !!((struct nouveau_mem *)new_mem->mm_node)->memtype;
 	int ret;
 
 	while (length) {
 		u32 amount, stride, height;
 
-		ret = RING_SPACE(chan, 18 + 6 * (src_tiled + dst_tiled));
-		if (ret)
-			return ret;
-
 		amount  = min(length, (u64)(4 * 1024 * 1024));
 		stride  = 16 * 4;
 		height  = amount / stride;
 
-		if (src_tiled) {
+		if (old_mem->mem_type == TTM_PL_VRAM &&
+		    nouveau_bo_tile_layout(nvbo)) {
+			ret = RING_SPACE(chan, 8);
+			if (ret)
+				return ret;
+
 			BEGIN_NV04(chan, NvSubCopy, 0x0200, 7);
 			OUT_RING  (chan, 0);
 			OUT_RING  (chan, 0);
@@ -816,10 +819,19 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 			OUT_RING  (chan, 0);
 			OUT_RING  (chan, 0);
 		} else {
+			ret = RING_SPACE(chan, 2);
+			if (ret)
+				return ret;
+
 			BEGIN_NV04(chan, NvSubCopy, 0x0200, 1);
 			OUT_RING  (chan, 1);
 		}
-		if (dst_tiled) {
+		if (new_mem->mem_type == TTM_PL_VRAM &&
+		    nouveau_bo_tile_layout(nvbo)) {
+			ret = RING_SPACE(chan, 8);
+			if (ret)
+				return ret;
+
 			BEGIN_NV04(chan, NvSubCopy, 0x021c, 7);
 			OUT_RING  (chan, 0);
 			OUT_RING  (chan, 0);
@@ -829,9 +841,17 @@ nv50_bo_move_m2mf(struct nouveau_channel *chan, struct ttm_buffer_object *bo,
 			OUT_RING  (chan, 0);
 			OUT_RING  (chan, 0);
 		} else {
+			ret = RING_SPACE(chan, 2);
+			if (ret)
+				return ret;
+
 			BEGIN_NV04(chan, NvSubCopy, 0x021c, 1);
 			OUT_RING  (chan, 1);
 		}
+
+		ret = RING_SPACE(chan, 14);
+		if (ret)
+			return ret;
 
 		BEGIN_NV04(chan, NvSubCopy, 0x0238, 2);
 		OUT_RING  (chan, upper_32_bits(src_offset));

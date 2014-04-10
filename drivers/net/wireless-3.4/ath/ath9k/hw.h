@@ -48,6 +48,7 @@
 #define AR9300_DEVID_AR9580	0x0033
 #define AR9300_DEVID_AR9462	0x0034
 #define AR9300_DEVID_AR9330	0x0035
+#define AR9485_DEVID_AR1111	0x0037
 
 #define AR5416_AR9100_DEVID	0x000b
 
@@ -348,6 +349,12 @@ enum ath9k_int {
 	 CHANNEL_HT40MINUS)
 
 #define MAX_RTT_TABLE_ENTRY     6
+#define RTT_HIST_MAX            3
+struct ath9k_rtt_hist {
+	u32 table[AR9300_MAX_CHAINS][RTT_HIST_MAX][MAX_RTT_TABLE_ENTRY];
+	u8 num_readings;
+};
+
 #define MAX_IQCAL_MEASUREMENT	8
 #define MAX_CL_TAB_ENTRY	16
 
@@ -357,7 +364,6 @@ struct ath9k_hw_cal_data {
 	int32_t CalValid;
 	int8_t iCoff;
 	int8_t qCoff;
-	bool rtt_done;
 	bool paprd_done;
 	bool nfcal_pending;
 	bool nfcal_interference;
@@ -368,8 +374,8 @@ struct ath9k_hw_cal_data {
 	u32 num_measures[AR9300_MAX_CHAINS];
 	int tx_corr_coeff[MAX_IQCAL_MEASUREMENT][AR9300_MAX_CHAINS];
 	u32 tx_clcal[AR9300_MAX_CHAINS][MAX_CL_TAB_ENTRY];
-	u32 rtt_table[AR9300_MAX_CHAINS][MAX_RTT_TABLE_ENTRY];
 	struct ath9k_nfcal_hist nfCalHist[NUM_NF_READINGS];
+	struct ath9k_rtt_hist rtt_hist;
 };
 
 struct ath9k_channel {
@@ -692,7 +698,6 @@ struct ath_hw {
 	u32 rfkill_polarity;
 	u32 ah_flags;
 
-	bool reset_power_on;
 	bool htc_reset_init;
 
 	enum nl80211_iftype opmode;
@@ -832,6 +837,7 @@ struct ath_hw {
 	struct ar5416IniArray ini_japan2484;
 	struct ar5416IniArray iniModes_9271_ANI_reg;
 	struct ar5416IniArray ini_radio_post_sys2ant;
+	struct ar5416IniArray ini_BTCOEX_MAX_TXPWR;
 
 	struct ar5416IniArray iniMac[ATH_INI_NUM_SPLIT];
 	struct ar5416IniArray iniBB[ATH_INI_NUM_SPLIT];
@@ -998,7 +1004,6 @@ void ar9003_hw_bb_watchdog_config(struct ath_hw *ah);
 void ar9003_hw_bb_watchdog_read(struct ath_hw *ah);
 void ar9003_hw_bb_watchdog_dbg_info(struct ath_hw *ah);
 void ar9003_hw_disable_phy_restart(struct ath_hw *ah);
-void ar9003_hw_dump_ani_reg(struct ath_hw *ah);
 void ar9003_paprd_enable(struct ath_hw *ah, bool val);
 void ar9003_paprd_populate_single_table(struct ath_hw *ah,
 					struct ath9k_hw_cal_data *caldata,
@@ -1009,6 +1014,7 @@ int ar9003_paprd_setup_gain_table(struct ath_hw *ah, int chain);
 int ar9003_paprd_init_table(struct ath_hw *ah);
 bool ar9003_paprd_is_done(struct ath_hw *ah);
 void ar9003_hw_set_paprd_txdesc(struct ath_hw *ah, void *ds, u8 chains);
+void ar9003_hw_set_chain_masks(struct ath_hw *ah, u8 rx, u8 tx);
 
 /* Hardware family op attach helpers */
 void ar5008_hw_attach_phy_ops(struct ath_hw *ah);
@@ -1022,7 +1028,6 @@ void ar9002_hw_attach_ops(struct ath_hw *ah);
 void ar9003_hw_attach_ops(struct ath_hw *ah);
 
 void ar9002_hw_load_ani_reg(struct ath_hw *ah, struct ath9k_channel *chan);
-bool ath9k_hw_detect_mac_hang(struct ath_hw *ah);
 /*
  * ANI work can be shared between all families but a next
  * generation implementation of ANI will be used only for AR9003 only
@@ -1040,11 +1045,6 @@ static inline bool ath9k_hw_btcoex_is_enabled(struct ath_hw *ah)
 {
 	return ah->btcoex_hw.enabled;
 }
-static inline bool ath9k_hw_mci_is_enabled(struct ath_hw *ah)
-{
-	return ah->btcoex_hw.enabled && (ah->caps.hw_caps & ATH9K_HW_CAP_MCI);
-
-}
 void ath9k_hw_btcoex_enable(struct ath_hw *ah);
 static inline enum ath_btcoex_scheme
 ath9k_hw_get_btcoex_scheme(struct ath_hw *ah)
@@ -1053,10 +1053,6 @@ ath9k_hw_get_btcoex_scheme(struct ath_hw *ah)
 }
 #else
 static inline bool ath9k_hw_btcoex_is_enabled(struct ath_hw *ah)
-{
-	return false;
-}
-static inline bool ath9k_hw_mci_is_enabled(struct ath_hw *ah)
 {
 	return false;
 }

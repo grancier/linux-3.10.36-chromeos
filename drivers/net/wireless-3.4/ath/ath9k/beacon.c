@@ -121,7 +121,7 @@ static void ath_tx_cabq(struct ieee80211_hw *hw, struct sk_buff *skb)
 
 	if (ath_tx_start(hw, skb, &txctl) != 0) {
 		ath_dbg(common, XMIT, "CABQ TX failed\n");
-		dev_kfree_skb_any(skb);
+		ieee80211_free_txskb(hw, skb);
 	}
 }
 
@@ -154,6 +154,7 @@ static struct ath_buf *ath_beacon_generate(struct ieee80211_hw *hw,
 				 skb->len, DMA_TO_DEVICE);
 		dev_kfree_skb_any(skb);
 		bf->bf_buf_addr = 0;
+		bf->bf_mpdu = NULL;
 	}
 
 	/* Get a new beacon from mac80211 */
@@ -650,8 +651,6 @@ static void ath_beacon_config_adhoc(struct ath_softc *sc,
 	u32 tsf, intval, nexttbtt;
 
 	ath9k_reset_beacon_status(sc);
-	if (!(sc->sc_flags & SC_OP_BEACONS))
-		ath9k_hw_settsf64(ah, sc->beacon.bc_tstamp);
 
 	intval = TU_TO_USEC(conf->beacon_interval);
 	tsf = roundup(ath9k_hw_gettsf32(ah) + TU_TO_USEC(FUDGE), intval);
@@ -808,10 +807,8 @@ void ath9k_set_beaconing_status(struct ath_softc *sc, bool status)
 {
 	struct ath_hw *ah = sc->sc_ah;
 
-	if (!ath_has_valid_bslot(sc)) {
-		sc->sc_flags &= ~SC_OP_BEACONS;
+	if (!ath_has_valid_bslot(sc))
 		return;
-	}
 
 	ath9k_ps_wakeup(sc);
 	if (status) {

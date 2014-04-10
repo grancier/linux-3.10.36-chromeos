@@ -78,10 +78,6 @@ struct ath_config {
 		       sizeof(struct ath_buf_state));		\
 	} while (0)
 
-#define ATH_RXBUF_RESET(_bf) do {		\
-		(_bf)->bf_stale = false;	\
-	} while (0)
-
 /**
  * enum buffer_type - Buffer type flags
  *
@@ -213,6 +209,7 @@ struct ath_frame_info {
 	enum ath9k_key_type keytype;
 	u8 keyix;
 	u8 retries;
+	u8 rtscts_rate;
 };
 
 struct ath_buf_state {
@@ -313,6 +310,7 @@ struct ath_rx {
 	struct ath_buf *rx_bufptr;
 	struct ath_rx_edma rx_edma[ATH9K_RX_QUEUE_MAX];
 
+	struct ath_buf *buf_hold;
 	struct sk_buff *frag;
 };
 
@@ -430,8 +428,6 @@ void ath9k_set_beaconing_status(struct ath_softc *sc, bool status);
 void ath_reset_work(struct work_struct *work);
 void ath_hw_check(struct work_struct *work);
 void ath_hw_pll_work(struct work_struct *work);
-void ath_rx_poll_work(unsigned long data);
-void ath_start_rx_poll(struct ath_softc *sc, u32 nmsec);
 void ath_paprd_calibrate(struct work_struct *work);
 void ath_ani_calibrate(unsigned long data);
 void ath_start_ani(struct ath_common *common);
@@ -592,7 +588,6 @@ struct ath_ant_comb {
 #define SC_OP_BT_SCAN                BIT(6)
 #define SC_OP_ANI_RUN                BIT(7)
 #define SC_OP_PRIM_STA_VIF           BIT(8)
-#define SC_OP_BB_WATCHDOG            BIT(9)
 
 /* Powersave flags */
 #define PS_WAIT_FOR_BEACON        BIT(0)
@@ -631,7 +626,6 @@ struct ath_softc {
 	spinlock_t sc_serial_rw;
 	spinlock_t sc_pm_lock;
 	spinlock_t sc_pcu_lock;
-	spinlock_t sc_bb_lock;
 	struct mutex mutex;
 	struct work_struct paprd_work;
 	struct work_struct hw_check_work;
@@ -674,7 +668,6 @@ struct ath_softc {
 	struct ath_beacon_config cur_beacon_conf;
 	struct delayed_work tx_complete_work;
 	struct delayed_work hw_pll_work;
-	struct timer_list rx_poll_timer;
 
 #ifdef CONFIG_ATH9K_BTCOEX_SUPPORT
 	struct ath_btcoex btcoex;
@@ -685,7 +678,6 @@ struct ath_softc {
 
 	struct ath_ant_comb ant_comb;
 	u8 ant_tx, ant_rx;
-	atomic_t stop_rx_poll;
 };
 
 void ath9k_tasklet(unsigned long data);

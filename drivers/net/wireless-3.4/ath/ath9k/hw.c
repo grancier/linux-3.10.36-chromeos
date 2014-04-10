@@ -325,6 +325,14 @@ static void ath9k_hw_disablepcie(struct ath_hw *ah)
 	REG_WRITE(ah, AR_PCIE_SERDES2, 0x00000000);
 }
 
+static void ath9k_hw_aspm_init(struct ath_hw *ah)
+{
+	struct ath_common *common = ath9k_hw_common(ah);
+
+	if (common->bus_ops->aspm_init)
+		common->bus_ops->aspm_init(common);
+}
+
 /* This should work for all families including legacy */
 static bool ath9k_hw_chip_test(struct ath_hw *ah)
 {
@@ -550,7 +558,7 @@ static int __ath9k_hw_init(struct ath_hw *ah)
 
 	if (NR_CPUS > 1 && ah->config.serialize_regmode == SER_REG_MODE_AUTO) {
 		if (ah->hw_version.macVersion == AR_SREV_VERSION_5416_PCI ||
-		    ((AR_SREV_9160(ah) || AR_SREV_9280(ah)) &&
+		    ((AR_SREV_9160(ah) || AR_SREV_9280(ah) || AR_SREV_9287(ah)) &&
 		     !ah->is_pciexpress)) {
 			ah->config.serialize_regmode =
 				SER_REG_MODE_ON;
@@ -621,6 +629,9 @@ static int __ath9k_hw_init(struct ath_hw *ah)
 	if (r)
 		return r;
 
+	if (ah->is_pciexpress)
+		ath9k_hw_aspm_init(ah);
+
 	r = ath9k_hw_init_macaddr(ah);
 	if (r) {
 		ath_err(common, "Failed to initialize MAC address\n");
@@ -665,6 +676,7 @@ int ath9k_hw_init(struct ath_hw *ah)
 	case AR9300_DEVID_AR9340:
 	case AR9300_DEVID_AR9580:
 	case AR9300_DEVID_AR9462:
+	case AR9485_DEVID_AR1111:
 		break;
 	default:
 		if (common->bus_ops->ath_bus_type == ATH_USB)
@@ -709,12 +721,24 @@ static void ath9k_hw_init_qos(struct ath_hw *ah)
 
 u32 ar9003_get_pll_sqsum_dvc(struct ath_hw *ah)
 {
+	struct ath_common *common = ath9k_hw_common(ah);
+	int i = 0;
+
 	REG_CLR_BIT(ah, PLL3, PLL3_DO_MEAS_MASK);
 	udelay(100);
 	REG_SET_BIT(ah, PLL3, PLL3_DO_MEAS_MASK);
 
-	while ((REG_READ(ah, PLL4) & PLL4_MEAS_DONE) == 0)
+	while ((REG_READ(ah, PLL4) & PLL4_MEAS_DONE) == 0) {
+
 		udelay(100);
+
+		if (WARN_ON_ONCE(i >= 100)) {
+			ath_err(common, "PLL4 meaurement not done\n");
+			break;
+		}
+
+		i++;
+	}
 
 	return (REG_READ(ah, PLL3) & SQSUM_DVC_MASK) >> 3;
 }
@@ -1352,14 +1376,9 @@ static bool ath9k_hw_set_reset_reg(struct ath_hw *ah, u32 type)
 	REG_WRITE(ah, AR_RTC_FORCE_WAKE,
 		  AR_RTC_FORCE_WAKE_EN | AR_RTC_FORCE_WAKE_ON_INT);
 
-	if (!ah->reset_power_on)
-		type = ATH9K_RESET_POWER_ON;
-
 	switch (type) {
 	case ATH9K_RESET_POWER_ON:
 		ret = ath9k_hw_set_reset_power_on(ah);
-		if (!ret)
-			ah->reset_power_on = true;
 		break;
 	case ATH9K_RESET_WARM:
 	case ATH9K_RESET_COLD:
@@ -1368,6 +1387,9 @@ static bool ath9k_hw_set_reset_reg(struct ath_hw *ah, u32 type)
 	default:
 		break;
 	}
+
+	if (ah->caps.hw_caps & ATH9K_HW_CAP_MCI)
+		REG_WRITE(ah, AR_RTC_KEEP_AWAKE, 0x2);
 
 	return ret;
 }
@@ -1382,7 +1404,9 @@ static bool ath9k_hw_chip_reset(struct ath_hw *ah,
 			reset_type = ATH9K_RESET_POWER_ON;
 		else
 			reset_type = ATH9K_RESET_COLD;
-	}
+	} else if (ah->chip_fullsleep || REG_READ(ah, AR_Q_TXE) ||
+		   (REG_READ(ah, AR_CR) & AR_CR_RXE))
+		reset_type = ATH9K_RESET_COLD;
 
 	if (!ath9k_hw_set_reset_reg(ah, reset_type))
 		return false;
@@ -1548,10 +1572,10 @@ static int ath9k_hw_do_fastcc(struct ath_hw *ah, struct ath9k_channel *chan)
 	 * For AR9462, make sure that calibration data for
 	 * re-using are present.
 	 */
-	if (AR_SREV_9462(ah) && (ah->caldata &&
-				 (!ah->caldata->done_txiqcal_once ||
-				  !ah->caldata->done_txclcal_once ||
-				  !ah->caldata->rtt_done)))
+	if (AR_SREV_9462(ah) && (!ah->caldata ||
+				 !ah->caldata->done_txiqcal_once ||
+				 !ah->caldata->done_txclcal_once ||
+				 !ah->caldata->rtt_hist.num_readings))
 		goto fail;
 
 	ath_dbg(common, RESET, "FastChannelChange for %d -> %d\n",
@@ -1564,7 +1588,7 @@ static int ath9k_hw_do_fastcc(struct ath_hw *ah, struct ath9k_channel *chan)
 	ath9k_hw_loadnf(ah, ah->curchan);
 	ath9k_hw_start_nfcal(ah, true);
 
-	if (ath9k_hw_mci_is_enabled(ah))
+	if ((ah->caps.hw_caps & ATH9K_HW_CAP_MCI) && ar9003_mci_is_ready(ah))
 		ar9003_mci_2g5g_switch(ah, true);
 
 	if (AR_SREV_9271(ah))
@@ -1585,9 +1609,10 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	u64 tsf = 0;
 	int i, r;
 	bool start_mci_reset = false;
+	bool mci = !!(ah->caps.hw_caps & ATH9K_HW_CAP_MCI);
 	bool save_fullsleep = ah->chip_fullsleep;
 
-	if (ath9k_hw_mci_is_enabled(ah)) {
+	if (mci) {
 		start_mci_reset = ar9003_mci_start_reset(ah, chan);
 		if (start_mci_reset)
 			return 0;
@@ -1616,7 +1641,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 			return r;
 	}
 
-	if (ath9k_hw_mci_is_enabled(ah))
+	if (mci)
 		ar9003_mci_stop_bt(ah, save_fullsleep);
 
 	saveDefAntenna = REG_READ(ah, AR_DEF_ANTENNA);
@@ -1674,7 +1699,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	if (r)
 		return r;
 
-	if (ath9k_hw_mci_is_enabled(ah))
+	if (mci)
 		ar9003_mci_reset(ah, false, IS_CHAN_2GHZ(chan), save_fullsleep);
 
 	/*
@@ -1786,6 +1811,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	if (caldata) {
 		caldata->done_txiqcal_once = false;
 		caldata->done_txclcal_once = false;
+		caldata->rtt_hist.num_readings = 0;
 	}
 	if (!ath9k_hw_init_cal(ah, chan))
 		return -EIO;
@@ -1793,8 +1819,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	ath9k_hw_loadnf(ah, chan);
 	ath9k_hw_start_nfcal(ah, true);
 
-	if (ath9k_hw_mci_is_enabled(ah) &&
-	    ar9003_mci_end_reset(ah, chan, caldata))
+	if (mci && ar9003_mci_end_reset(ah, chan, caldata))
 		return -EIO;
 
 	ENABLE_REGWRITE_BUFFER(ah);
@@ -1839,7 +1864,7 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
 	if (ath9k_hw_btcoex_is_enabled(ah))
 		ath9k_hw_btcoex_enable(ah);
 
-	if (ath9k_hw_mci_is_enabled(ah))
+	if (mci)
 		ar9003_mci_check_bt(ah);
 
 	if (AR_SREV_9300_20_OR_LATER(ah)) {
@@ -2021,15 +2046,23 @@ bool ath9k_hw_setpower(struct ath_hw *ah, enum ath9k_power_mode mode)
 	switch (mode) {
 	case ATH9K_PM_AWAKE:
 		status = ath9k_hw_set_power_awake(ah, setChip);
+
+		if (ah->caps.hw_caps & ATH9K_HW_CAP_MCI)
+			REG_WRITE(ah, AR_RTC_KEEP_AWAKE, 0x2);
+
 		break;
 	case ATH9K_PM_FULL_SLEEP:
-		if (ath9k_hw_mci_is_enabled(ah))
+		if (ah->caps.hw_caps & ATH9K_HW_CAP_MCI)
 			ar9003_mci_set_full_sleep(ah);
 
 		ath9k_set_power_sleep(ah, setChip);
 		ah->chip_fullsleep = true;
 		break;
 	case ATH9K_PM_NETWORK_SLEEP:
+
+		if (ah->caps.hw_caps & ATH9K_HW_CAP_MCI)
+			REG_WRITE(ah, AR_RTC_KEEP_AWAKE, 0x2);
+
 		ath9k_set_power_network_sleep(ah, setChip);
 		break;
 	default:
@@ -2307,7 +2340,7 @@ int ath9k_hw_fill_cap_info(struct ath_hw *ah)
 	else
 		pCap->rts_aggr_limit = (8 * 1024);
 
-#ifdef CONFIG_ATH9K_RFKILL
+#if defined(CONFIG_RFKILL) || defined(CONFIG_RFKILL_MODULE)
 	ah->rfsilent = ah->eep_ops->get_eeprom(ah, EEP_RF_SILENT);
 	if (ah->rfsilent & EEP_RFSILENT_ENABLED) {
 		ah->rfkill_gpio =
@@ -3056,74 +3089,3 @@ void ath9k_hw_name(struct ath_hw *ah, char *hw_name, size_t len)
 	hw_name[used] = '\0';
 }
 EXPORT_SYMBOL(ath9k_hw_name);
-
-static bool ath9k_hw_check_dcs(u32 dma_dbg, int num_dcu_states,
-			       int *hang_state, int *hang_pos)
-{
-	static u32 dcu_chain_state[] = {5, 6, 9}; /* DCU chain stuck states */
-	u32 chain_state, dcs_pos, i;
-
-	for (dcs_pos = 0; dcs_pos < num_dcu_states; dcs_pos++) {
-		chain_state = (dma_dbg >> (5 * dcs_pos)) & 0x1f;
-		for (i = 0; i < 3; i++) {
-			if (chain_state == dcu_chain_state[i]) {
-				*hang_state = chain_state;
-				*hang_pos = dcs_pos;
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-#define DCU_COMPLETE_STATE        1
-#define DCU_COMPLETE_STATE_MASK 0x3
-#define NUM_STATUS_READS         50
-bool ath9k_hw_detect_mac_hang(struct ath_hw *ah)
-{
-	u32 chain_state, comp_state, dcs_reg = AR_DMADBG_4;
-	u32 i, hang_pos, hang_state;
-
-	comp_state = REG_READ(ah, AR_DMADBG_6);
-
-	if ((comp_state & DCU_COMPLETE_STATE_MASK) != DCU_COMPLETE_STATE) {
-		ath_dbg(ath9k_hw_common(ah), RX_STUCK,
-			"MAC Hang signature not found at DCU complete\n");
-		return false;
-	}
-
-	chain_state = REG_READ(ah, dcs_reg);
-	if (ath9k_hw_check_dcs(chain_state, 6, &hang_state, &hang_pos))
-		goto hang_check_iter;
-
-	dcs_reg = AR_DMADBG_5;
-	chain_state = REG_READ(ah, dcs_reg);
-	if (ath9k_hw_check_dcs(chain_state, 4, &hang_state, &hang_pos))
-		goto hang_check_iter;
-
-	ath_dbg(ath9k_hw_common(ah), RX_STUCK,
-		"MAC Hang signature 1 not found\n");
-	return false;
-
-hang_check_iter:
-	ath_dbg(ath9k_hw_common(ah), RX_STUCK,
-		"DCU registers: chain %08x complete %08x Hang: state %d pos %d\n",
-		chain_state, comp_state, hang_state, hang_pos);
-
-	for (i = 0; i < NUM_STATUS_READS; i++) {
-		chain_state = REG_READ(ah, dcs_reg);
-		chain_state = (chain_state >> (5 * hang_pos)) & 0x1f;
-		comp_state = REG_READ(ah, AR_DMADBG_6);
-
-		if (((comp_state & DCU_COMPLETE_STATE_MASK) !=
-		      DCU_COMPLETE_STATE) ||
-		    (chain_state != hang_state))
-			return false;
-	}
-
-	ath_dbg(ath9k_hw_common(ah), RX_STUCK,
-		"MAC Hang signature 1 found\n");
-
-	return true;
-}
-EXPORT_SYMBOL(ath9k_hw_detect_mac_hang);

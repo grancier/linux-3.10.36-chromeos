@@ -142,8 +142,7 @@ static const struct ar9300_eeprom ar9300_default = {
 	 },
 	.base_ext1 = {
 		.ant_div_control = 0,
-		.future = {0, 0, 0},
-		.tempslopextension = {0, 0, 0, 0, 0, 0, 0, 0}
+		.future = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	},
 	.calFreqPier2G = {
 		FREQ2FBIN(2412, 1),
@@ -716,8 +715,7 @@ static const struct ar9300_eeprom ar9300_x113 = {
 	 },
 	 .base_ext1 = {
 		.ant_div_control = 0,
-		.future = {0, 0, 0},
-		.tempslopextension = {0, 0, 0, 0, 0, 0, 0, 0}
+		.future = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	 },
 	.calFreqPier2G = {
 		FREQ2FBIN(2412, 1),
@@ -1291,8 +1289,7 @@ static const struct ar9300_eeprom ar9300_h112 = {
 	},
 	.base_ext1 = {
 		.ant_div_control = 0,
-		.future = {0, 0, 0},
-		.tempslopextension = {0, 0, 0, 0, 0, 0, 0, 0}
+		.future = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	},
 	.calFreqPier2G = {
 		FREQ2FBIN(2412, 1),
@@ -1866,8 +1863,7 @@ static const struct ar9300_eeprom ar9300_x112 = {
 	},
 	.base_ext1 = {
 		.ant_div_control = 0,
-		.future = {0, 0, 0},
-		.tempslopextension = {0, 0, 0, 0, 0, 0, 0, 0}
+		.future = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	},
 	.calFreqPier2G = {
 		FREQ2FBIN(2412, 1),
@@ -2440,8 +2436,7 @@ static const struct ar9300_eeprom ar9300_h116 = {
 	 },
 	 .base_ext1 = {
 		.ant_div_control = 0,
-		.future = {0, 0, 0},
-		.tempslopextension = {0, 0, 0, 0, 0, 0, 0, 0}
+		.future = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	 },
 	.calFreqPier2G = {
 		FREQ2FBIN(2412, 1),
@@ -3431,11 +3426,11 @@ static u32 ath9k_hw_ar9003_dump_eeprom(struct ath_hw *ah, bool dump_base_hdr,
 	if (!dump_base_hdr) {
 		len += snprintf(buf + len, size - len,
 				"%20s :\n", "2GHz modal Header");
-		len = ar9003_dump_modal_eeprom(buf, len, size,
+		len += ar9003_dump_modal_eeprom(buf, len, size,
 						&eep->modalHeader2G);
 		len += snprintf(buf + len, size - len,
 				"%20s :\n", "5GHz modal Header");
-		len = ar9003_dump_modal_eeprom(buf, len, size,
+		len += ar9003_dump_modal_eeprom(buf, len, size,
 						&eep->modalHeader5G);
 		goto out;
 	}
@@ -3967,62 +3962,6 @@ static void ar9003_hw_txend_to_xpa_off_apply(struct ath_hw *ah, u16 freq)
 		      AR_PHY_XPA_TIMING_CTL_TX_END_XPAA_OFF, value);
 }
 
-static int ar9003_hw_get_thermometer(struct ath_hw *ah)
-{
-	struct ar9300_eeprom *eep = &ah->eeprom.ar9300_eep;
-	struct ar9300_base_eep_hdr *pBase = &eep->baseEepHeader;
-	int thermometer =  (pBase->miscConfiguration >> 1) & 0x3;
-
-	return --thermometer;
-}
-
-static void ar9003_hw_thermometer_apply(struct ath_hw *ah)
-{
-	int thermometer = ar9003_hw_get_thermometer(ah);
-	u8 therm_on = (thermometer < 0) ? 0 : 1;
-
-	REG_RMW_FIELD(ah, AR_PHY_65NM_CH0_RXTX4,
-		      AR_PHY_65NM_CH0_RXTX4_THERM_ON_OVR, therm_on);
-	if (ah->caps.tx_chainmask & BIT(1))
-		REG_RMW_FIELD(ah, AR_PHY_65NM_CH1_RXTX4,
-			      AR_PHY_65NM_CH0_RXTX4_THERM_ON_OVR, therm_on);
-	if (ah->caps.tx_chainmask & BIT(2))
-		REG_RMW_FIELD(ah, AR_PHY_65NM_CH2_RXTX4,
-			      AR_PHY_65NM_CH0_RXTX4_THERM_ON_OVR, therm_on);
-
-	therm_on = (thermometer < 0) ? 0 : (thermometer == 0);
-	REG_RMW_FIELD(ah, AR_PHY_65NM_CH0_RXTX4,
-		      AR_PHY_65NM_CH0_RXTX4_THERM_ON, therm_on);
-	if (ah->caps.tx_chainmask & BIT(1)) {
-		therm_on = (thermometer < 0) ? 0 : (thermometer == 1);
-		REG_RMW_FIELD(ah, AR_PHY_65NM_CH1_RXTX4,
-			      AR_PHY_65NM_CH0_RXTX4_THERM_ON, therm_on);
-	}
-	if (ah->caps.tx_chainmask & BIT(2)) {
-		therm_on = (thermometer < 0) ? 0 : (thermometer == 2);
-		REG_RMW_FIELD(ah, AR_PHY_65NM_CH2_RXTX4,
-			      AR_PHY_65NM_CH0_RXTX4_THERM_ON, therm_on);
-	}
-}
-
-static void ar9003_hw_thermo_cal_apply(struct ath_hw *ah)
-{
-	u32 data, ko, kg;
-
-	if (!AR_SREV_9462_20(ah))
-		return;
-	ar9300_otp_read_word(ah, 1, &data);
-	ko = data & 0xff;
-	kg = (data >> 8) & 0xff;
-	if (ko || kg) {
-		REG_RMW_FIELD(ah, AR_PHY_BB_THERM_ADC_3,
-			      AR_PHY_BB_THERM_ADC_3_THERM_ADC_OFFSET, ko);
-		REG_RMW_FIELD(ah, AR_PHY_BB_THERM_ADC_3,
-			      AR_PHY_BB_THERM_ADC_3_THERM_ADC_SCALE_GAIN,
-			      kg + 256);
-	}
-}
-
 static void ath9k_hw_ar9300_set_board_values(struct ath_hw *ah,
 					     struct ath9k_channel *chan)
 {
@@ -4036,8 +3975,6 @@ static void ath9k_hw_ar9300_set_board_values(struct ath_hw *ah,
 	if (AR_SREV_9485(ah) || AR_SREV_9330(ah) || AR_SREV_9340(ah))
 		ar9003_hw_apply_tuning_caps(ah);
 	ar9003_hw_txend_to_xpa_off_apply(ah, chan->channel);
-	ar9003_hw_thermometer_apply(ah);
-	ar9003_hw_thermo_cal_apply(ah);
 }
 
 static void ath9k_hw_ar9300_set_addac(struct ath_hw *ah,
@@ -4542,7 +4479,7 @@ static int ar9003_hw_power_control_override(struct ath_hw *ah,
 {
 	int tempSlope = 0;
 	struct ar9300_eeprom *eep = &ah->eeprom.ar9300_eep;
-	int f[8], t[8], i;
+	int f[3], t[3];
 
 	REG_RMW(ah, AR_PHY_TPC_11_B0,
 		(correction[0] << AR_PHY_TPC_OLPC_GAIN_DELTA_S),
@@ -4575,14 +4512,7 @@ static int ar9003_hw_power_control_override(struct ath_hw *ah,
 	 */
 	if (frequency < 4000)
 		tempSlope = eep->modalHeader2G.tempSlope;
-	else if ((eep->baseEepHeader.miscConfiguration & 0x20) != 0) {
-		for (i = 0; i < 8; i++) {
-			t[i] = eep->base_ext1.tempslopextension[i];
-			f[i] = FBIN2FREQ(eep->calFreqPier5G[i], 0);
-		}
-		tempSlope = ar9003_hw_power_interpolate((s32) frequency,
-							f, t, 8);
-	} else if (eep->base_ext2.tempSlopeLow != 0) {
+	else if (eep->base_ext2.tempSlopeLow != 0) {
 		t[0] = eep->base_ext2.tempSlopeLow;
 		f[0] = 5180;
 		t[1] = eep->modalHeader5G.tempSlope;
@@ -5201,213 +5131,9 @@ unsigned int ar9003_get_paprd_scale_factor(struct ath_hw *ah,
 	}
 }
 
-static u32 ath9k_hw_ar9003_dump_eep_power(struct ath_hw *ah, u8 *buf,
-					  u32 len, u32 size)
-{
-#undef PR_EEP
-#define PR_EEP(_s, _val) \
-	do {								\
-		len += snprintf(buf + len, size - len, _s, (_val));	\
-	} while (0)
-	struct ar9300_eeprom *eep = &ah->eeprom.ar9300_eep;
-	int i, j;
-
-	PR_EEP("macAddr : %pM\n", eep->macAddr);
-	len += snprintf(buf + len, size - len, "calPierData2G :\n");
-	len += snprintf(buf + len, size - len,
-			"Chain  refPower voltMeas tempMeas "
-			"rxNoisefloorCal rxNoisefloorPower rxTempMeas\n");
-	for (i = 0; i < AR9300_MAX_CHAINS; i++) {
-		if (!(ah->txchainmask & BIT(i)))
-			continue;
-
-		for (j = 0; j < AR9300_NUM_2G_CAL_PIERS; j++) {
-			len += snprintf(buf + len, size - len,
-				"%2d %8d %8d %10d %10d %20d %8d\n", i,
-				eep->calPierData2G[i][j].refPower,
-				eep->calPierData2G[i][j].voltMeas,
-				eep->calPierData2G[i][j].tempMeas,
-				eep->calPierData2G[i][j].rxNoisefloorCal,
-				eep->calPierData2G[i][j].rxNoisefloorPower,
-				eep->calPierData2G[i][j].rxTempMeas);
-		}
-	}
-	len += snprintf(buf + len, size - len, "\ncalTarget_freqbin_Cck :\n");
-	for (i = 0; i < AR9300_NUM_2G_CCK_TARGET_POWERS; i++)
-		PR_EEP("%u ", FBIN2FREQ(eep->calTarget_freqbin_Cck[i], 1));
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len, "\ncalTarget_freqbin_2G :\n");
-	for (i = 0; i < AR9300_NUM_2G_20_TARGET_POWERS; i++)
-		PR_EEP("%u ", FBIN2FREQ(eep->calTarget_freqbin_2G[i], 1));
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len,
-			"\ncalTarget_freqbin_2GHT20 :\n");
-	for (i = 0; i < AR9300_NUM_2G_20_TARGET_POWERS; i++)
-		PR_EEP("%u ", FBIN2FREQ(eep->calTarget_freqbin_2GHT20[i], 1));
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len,
-			"\ncalTarget_freqbin_2GHT40 :\n");
-	for (i = 0; i < AR9300_NUM_2G_40_TARGET_POWERS; i++)
-		PR_EEP("%u ", FBIN2FREQ(eep->calTarget_freqbin_2GHT40[i], 1));
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len, "\ncalTargetPowerCck :\n");
-	for (i = 0; i < AR9300_NUM_2G_CCK_TARGET_POWERS; i++) {
-		for (j = 0; j < 4; j++)
-			PR_EEP("%u ", (eep->calTargetPowerCck[i].tPow2x[j])/2);
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len, "\ncalTargetPower2G :\n");
-	for (i = 0; i < AR9300_NUM_2G_20_TARGET_POWERS; i++) {
-		for (j = 0; j < 4; j++)
-			PR_EEP("%u ", (eep->calTargetPower2G[i].tPow2x[j])/2);
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len, "\ncalTargetPower2GHT20 :\n");
-	for (i = 0; i < AR9300_NUM_2G_20_TARGET_POWERS; i++) {
-		for (j = 0; j < 14; j++)
-			PR_EEP("%u ",
-			       (eep->calTargetPower2GHT20[i].tPow2x[j])/2);
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len, "\ncalTargetPower2GHT40 :\n");
-	for (i = 0; i < AR9300_NUM_2G_40_TARGET_POWERS; i++) {
-		for (j = 0; j < 14; j++)
-			PR_EEP("%u ",
-			       (eep->calTargetPower2GHT40[i].tPow2x[j])/2);
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len, "\nctlIndex_2G :\n");
-	for (i = 0; i < AR9300_NUM_CTLS_2G; i++)
-		PR_EEP("0x%x ", eep->ctlIndex_2G[i]);
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len, "\nctl_freqbin_2G:\n");
-	for (i = 0; i < AR9300_NUM_CTLS_2G; i++) {
-		for (j = 0; j < AR9300_NUM_BAND_EDGES_2G; j++)
-			PR_EEP("%u ", FBIN2FREQ(eep->ctl_freqbin_2G[i][j], 1));
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len,
-			"\nctlPowerData_2G : { power, flag }\n");
-	for (i = 0; i < AR9300_NUM_CTLS_2G; i++) {
-		for (j = 0; j < AR9300_NUM_BAND_EDGES_2G; j++) {
-			len += snprintf(buf + len, size - len, "{ %d, %u } ",
-			   CTL_EDGE_TPOWER(eep->ctlPowerData_2G[i].ctlEdges[j]),
-			   CTL_EDGE_FLAGS(eep->ctlPowerData_2G[i].ctlEdges[j]));
-		}
-		len += snprintf(buf + len, size - len, "\n");
-	}
-	len += snprintf(buf + len, size - len, "\ncalPierData5G :\n");
-	len += snprintf(buf + len, size - len,
-			"Chain  refPower voltMeas tempMeas "
-			"rxNoisefloorCal rxNoisefloorPower rxTempMeas\n");
-	for (i = 0; i < AR9300_MAX_CHAINS; i++) {
-		if (!(ah->txchainmask & BIT(i)))
-			continue;
-
-		for (j = 0; j < AR9300_NUM_5G_CAL_PIERS; j++) {
-			len += snprintf(buf + len, size - len,
-				"%2d %8d %8d %10d %10d %20d %8d\n", i,
-				eep->calPierData5G[i][j].refPower,
-				eep->calPierData5G[i][j].voltMeas,
-				eep->calPierData5G[i][j].tempMeas,
-				eep->calPierData5G[i][j].rxNoisefloorCal,
-				eep->calPierData5G[i][j].rxNoisefloorPower,
-				eep->calPierData5G[i][j].rxTempMeas);
-		}
-	}
-	len += snprintf(buf + len, size - len, "\ncalTarget_freqbin_5G :\n");
-	for (i = 0; i < AR9300_NUM_5G_20_TARGET_POWERS; i++)
-		PR_EEP("%u ", FBIN2FREQ(eep->calTarget_freqbin_5G[i], 0));
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len,
-			"\ncalTarget_freqbin_5GHT20 :\n");
-	for (i = 0; i < AR9300_NUM_5G_20_TARGET_POWERS; i++)
-		PR_EEP("%u ", FBIN2FREQ(eep->calTarget_freqbin_5GHT20[i], 0));
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len,
-			"\ncalTarget_freqbin_5GHT40 :\n");
-	for (i = 0; i < AR9300_NUM_5G_40_TARGET_POWERS; i++)
-		PR_EEP("%u ", FBIN2FREQ(eep->calTarget_freqbin_5GHT40[i], 0));
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len, "\ncalTargetPower5G :\n");
-	for (i = 0; i < AR9300_NUM_5G_20_TARGET_POWERS; i++) {
-		for (j = 0; j < 4; j++)
-			PR_EEP("%u ", (eep->calTargetPower5G[i].tPow2x[j])/2);
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len, "\ncalTargetPower5GHT20 :\n");
-	for (i = 0; i < AR9300_NUM_5G_20_TARGET_POWERS; i++) {
-		for (j = 0; j < 14; j++)
-			PR_EEP("%u ",
-			       (eep->calTargetPower5GHT20[i].tPow2x[j])/2);
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len, "\ncalTargetPower5GHT40 :\n");
-	for (i = 0; i < AR9300_NUM_5G_40_TARGET_POWERS; i++) {
-		for (j = 0; j < 14; j++)
-			PR_EEP("%u ",
-			       (eep->calTargetPower5GHT40[i].tPow2x[j])/2);
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len, "\nctlIndex_5G :\n");
-	for (i = 0; i < AR9300_NUM_CTLS_5G; i++)
-		PR_EEP("0x%x ", eep->ctlIndex_5G[i]);
-	len += snprintf(buf + len, size - len, "\n");
-
-	len += snprintf(buf + len, size - len, "\nctl_freqbin_5G:\n");
-	for (i = 0; i < AR9300_NUM_CTLS_5G; i++) {
-		for (j = 0; j < AR9300_NUM_BAND_EDGES_5G; j++)
-			PR_EEP("%u ", FBIN2FREQ(eep->ctl_freqbin_5G[i][j], 0));
-		len += snprintf(buf + len, size - len, "\n");
-	}
-
-	len += snprintf(buf + len, size - len,
-			"\nctlPowerData_5G : { power, flag }\n");
-	for (i = 0; i < AR9300_NUM_CTLS_5G; i++) {
-		for (j = 0; j < AR9300_NUM_BAND_EDGES_5G; j++) {
-			len += snprintf(buf + len, size - len, "{ %d, %u } ",
-			   CTL_EDGE_TPOWER(eep->ctlPowerData_5G[i].ctlEdges[j]),
-			   CTL_EDGE_FLAGS(eep->ctlPowerData_5G[i].ctlEdges[j]));
-		}
-		len += snprintf(buf + len, size - len, "\n");
-	}
-	len += snprintf(buf + len, size - len, "\n");
-
-	if (ah->curchan)
-		PR_EEP("freq %d\n", ah->curchan->channel);
-
-	for (i = 0; i < 12; i++)
-		len += snprintf(buf + len, size - len,
-				"Tx Power Rate %2d : 0x%08x\n",
-				i, REG_READ(ah, AR_PHY_POWER_TX_RATE(i)));
-
-	if (len > size)
-		len = size;
-
-#undef PR_EEP
-	return len;
-}
-
 const struct eeprom_ops eep_ar9300_ops = {
 	.check_eeprom = ath9k_hw_ar9300_check_eeprom,
 	.get_eeprom = ath9k_hw_ar9300_get_eeprom,
-	.dump_eep_power = ath9k_hw_ar9003_dump_eep_power,
 	.fill_eeprom = ath9k_hw_ar9300_fill_eeprom,
 	.dump_eeprom = ath9k_hw_ar9003_dump_eeprom,
 	.get_eeprom_ver = ath9k_hw_ar9300_get_eeprom_ver,
