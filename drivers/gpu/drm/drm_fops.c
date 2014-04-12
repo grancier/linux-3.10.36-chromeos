@@ -48,6 +48,7 @@ static int drm_open_helper(struct inode *inode, struct file *filp,
 
 static int drm_setup(struct drm_device * dev)
 {
+	int i;
 	int ret;
 
 	if (dev->driver->firstopen) {
@@ -56,12 +57,50 @@ static int drm_setup(struct drm_device * dev)
 			return ret;
 	}
 
-	ret = drm_legacy_dma_setup(dev);
-	if (ret < 0)
-		return ret;
+	atomic_set(&dev->ioctl_count, 0);
+	atomic_set(&dev->vma_count, 0);
 
+	if (drm_core_check_feature(dev, DRIVER_HAVE_DMA) &&
+	    !drm_core_check_feature(dev, DRIVER_MODESET)) {
+		dev->buf_use = 0;
+		atomic_set(&dev->buf_alloc, 0);
+
+		i = drm_dma_setup(dev);
+		if (i < 0)
+			return i;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(dev->counts); i++)
+		atomic_set(&dev->counts[i], 0);
+
+	dev->sigdata.lock = NULL;
+
+	dev->context_flag = 0;
+	dev->interrupt_flag = 0;
+	dev->dma_flag = 0;
+	dev->last_context = 0;
+	dev->last_switch = 0;
+	dev->last_checked = 0;
+	init_waitqueue_head(&dev->context_wait);
+	dev->if_version = 0;
+
+	dev->ctx_start = 0;
+	dev->lck_start = 0;
+
+	dev->buf_async = NULL;
+	init_waitqueue_head(&dev->buf_readers);
+	init_waitqueue_head(&dev->buf_writers);
 
 	DRM_DEBUG("\n");
+
+	/*
+	 * The kernel's context could be created here, but is now created
+	 * in drm_dma_enqueue.  This is more resource-efficient for
+	 * hardware that does not do DMA, but may mean that
+	 * drm_select_queue fails between the time the interrupt is
+	 * initialized and the time the queues are initialized.
+	 */
+
 	return 0;
 }
 
@@ -112,6 +151,7 @@ int drm_open(struct inode *inode, struct file *filp)
 	retcode = drm_open_helper(inode, filp, dev);
 	if (retcode)
 		goto err_undo;
+	atomic_inc(&dev->counts[_DRM_STAT_OPENS]);
 	if (need_setup) {
 		retcode = drm_setup(dev);
 		if (retcode)
@@ -255,15 +295,13 @@ static int drm_open_helper(struct inode *inode, struct file *filp,
 			goto out_free;
 	}
 
-	/* if there is no current master make this fd it, but do not create
-	 * any master object for render clients */
+
+	/* if there is no current master make this fd it */
 	mutex_lock(&dev->struct_mutex);
-	if (!priv->minor->master && !drm_is_render_client(priv)) {
-		/* create a new master but don't assign it yet
-		 * to ensure master->driver_priv is set up first
-		 */
-		struct drm_master* master_ptr = drm_master_create(priv->minor);
-		if (!master_ptr) {
+	if (!priv->minor->master) {
+		/* create a new master */
+		priv->minor->master = drm_master_create(priv->minor);
+		if (!priv->minor->master) {
 			mutex_unlock(&dev->struct_mutex);
 			ret = -ENOMEM;
 			goto out_free;
@@ -271,7 +309,7 @@ static int drm_open_helper(struct inode *inode, struct file *filp,
 
 		priv->is_master = 1;
 		/* take another reference for the copy in the local file priv */
-		priv->master = drm_master_get(master_ptr);
+		priv->master = drm_master_get(priv->minor->master);
 
 		priv->authenticated = 1;
 
@@ -281,7 +319,7 @@ static int drm_open_helper(struct inode *inode, struct file *filp,
 			if (ret) {
 				mutex_lock(&dev->struct_mutex);
 				/* drop both references if this fails */
-				drm_master_put(&master_ptr);
+				drm_master_put(&priv->minor->master);
 				drm_master_put(&priv->master);
 				mutex_unlock(&dev->struct_mutex);
 				goto out_free;
@@ -292,18 +330,18 @@ static int drm_open_helper(struct inode *inode, struct file *filp,
 			ret = dev->driver->master_set(dev, priv, true);
 			if (ret) {
 				/* drop both references if this fails */
-				drm_master_put(&master_ptr);
+				drm_master_put(&priv->minor->master);
 				drm_master_put(&priv->master);
 				mutex_unlock(&dev->struct_mutex);
 				goto out_free;
 			}
 		}
-		priv->minor->master = master_ptr;
-	} else if (!drm_is_render_client(priv)) {
+		mutex_unlock(&dev->struct_mutex);
+	} else {
 		/* get a reference to the master */
 		priv->master = drm_master_get(priv->minor->master);
+		mutex_unlock(&dev->struct_mutex);
 	}
-	mutex_unlock(&dev->struct_mutex);
 
 	mutex_lock(&dev->struct_mutex);
 	list_add(&priv->lhead, &dev->filelist);
@@ -334,6 +372,18 @@ static int drm_open_helper(struct inode *inode, struct file *filp,
 	filp->private_data = NULL;
 	return ret;
 }
+
+/** No-op. */
+int drm_fasync(int fd, struct file *filp, int on)
+{
+	struct drm_file *priv = filp->private_data;
+	struct drm_device *dev = priv->minor->dev;
+
+	DRM_DEBUG("fd = %d, device = 0x%lx\n", fd,
+		  (long)old_encode_dev(priv->minor->device));
+	return fasync_helper(fd, filp, on, &dev->buf_async);
+}
+EXPORT_SYMBOL(drm_fasync);
 
 static void drm_master_release(struct drm_device *dev, struct file *filp)
 {
@@ -369,71 +419,6 @@ static void drm_events_release(struct drm_file *file_priv)
 		e->destroy(e);
 
 	spin_unlock_irqrestore(&dev->event_lock, flags);
-}
-
-/**
- * drm_legacy_dev_reinit
- *
- * Reinitializes a legacy/ums drm device in it's lastclose function.
- */
-static void drm_legacy_dev_reinit(struct drm_device *dev)
-{
-	if (drm_core_check_feature(dev, DRIVER_MODESET))
-		return;
-
-	atomic_set(&dev->ioctl_count, 0);
-	atomic_set(&dev->vma_count, 0);
-
-	dev->sigdata.lock = NULL;
-
-	dev->context_flag = 0;
-	dev->last_context = 0;
-	dev->if_version = 0;
-}
-
-/**
- * Take down the DRM device.
- *
- * \param dev DRM device structure.
- *
- * Frees every resource in \p dev.
- *
- * \sa drm_device
- */
-int drm_lastclose(struct drm_device * dev)
-{
-	struct drm_vma_entry *vma, *vma_temp;
-
-	DRM_DEBUG("\n");
-
-	if (dev->driver->lastclose)
-		dev->driver->lastclose(dev);
-	DRM_DEBUG("driver lastclose completed\n");
-
-	if (dev->irq_enabled && !drm_core_check_feature(dev, DRIVER_MODESET))
-		drm_irq_uninstall(dev);
-
-	mutex_lock(&dev->struct_mutex);
-
-	drm_agp_clear(dev);
-
-	drm_legacy_sg_cleanup(dev);
-
-	/* Clear vma list (only built for debugging) */
-	list_for_each_entry_safe(vma, vma_temp, &dev->vmalist, head) {
-		list_del(&vma->head);
-		kfree(vma);
-	}
-
-	drm_legacy_dma_takedown(dev);
-
-	dev->dev_mapping = NULL;
-	mutex_unlock(&dev->struct_mutex);
-
-	drm_legacy_dev_reinit(dev);
-
-	DRM_DEBUG("lastclose completed\n");
-	return 0;
 }
 
 /**
@@ -547,15 +532,13 @@ int drm_release(struct inode *inode, struct file *filp)
 	iput(container_of(dev->dev_mapping, struct inode, i_data));
 
 	/* drop the reference held my the file priv */
-	if (file_priv->master)
-		drm_master_put(&file_priv->master);
+	drm_master_put(&file_priv->master);
 	file_priv->is_master = 0;
 	list_del(&file_priv->lhead);
 	mutex_unlock(&dev->struct_mutex);
 
 	if (dev->driver->postclose)
 		dev->driver->postclose(dev, file_priv);
-
 
 	if (drm_core_check_feature(dev, DRIVER_PRIME))
 		drm_prime_destroy_file_private(&file_priv->prime);
@@ -567,6 +550,7 @@ int drm_release(struct inode *inode, struct file *filp)
 	 * End inline drm_release
 	 */
 
+	atomic_inc(&dev->counts[_DRM_STAT_CLOSES]);
 	if (!--dev->open_count) {
 		if (atomic_read(&dev->ioctl_count)) {
 			DRM_ERROR("Device busy: %d\n",

@@ -26,7 +26,11 @@
 #include <drm/drmP.h>
 #include <drm/drm.h>
 #include <drm/drm_gem_cma_helper.h>
-#include <drm/drm_vma_manager.h>
+
+static unsigned int get_gem_mmap_offset(struct drm_gem_object *obj)
+{
+	return (unsigned int)obj->map_list.hash.key << PAGE_SHIFT;
+}
 
 static void drm_gem_cma_buf_destroy(struct drm_device *drm,
 		struct drm_gem_cma_object *cma_obj)
@@ -136,7 +140,8 @@ void drm_gem_cma_free_object(struct drm_gem_object *gem_obj)
 {
 	struct drm_gem_cma_object *cma_obj;
 
-	drm_gem_free_mmap_offset(gem_obj);
+	if (gem_obj->map_list.map)
+		drm_gem_free_mmap_offset(gem_obj);
 
 	drm_gem_object_release(gem_obj);
 
@@ -194,7 +199,7 @@ int drm_gem_cma_dumb_map_offset(struct drm_file *file_priv,
 		return -EINVAL;
 	}
 
-	*offset = drm_vma_node_offset_addr(&gem_obj->vma_node);
+	*offset = get_gem_mmap_offset(gem_obj);
 
 	drm_gem_object_unreference(gem_obj);
 
@@ -235,16 +240,27 @@ int drm_gem_cma_mmap(struct file *filp, struct vm_area_struct *vma)
 }
 EXPORT_SYMBOL_GPL(drm_gem_cma_mmap);
 
+/*
+ * drm_gem_cma_dumb_destroy - (struct drm_driver)->dumb_destroy callback function
+ */
+int drm_gem_cma_dumb_destroy(struct drm_file *file_priv,
+		struct drm_device *drm, unsigned int handle)
+{
+	return drm_gem_handle_delete(file_priv, handle);
+}
+EXPORT_SYMBOL_GPL(drm_gem_cma_dumb_destroy);
+
 #ifdef CONFIG_DEBUG_FS
 void drm_gem_cma_describe(struct drm_gem_cma_object *cma_obj, struct seq_file *m)
 {
 	struct drm_gem_object *obj = &cma_obj->base;
 	struct drm_device *dev = obj->dev;
-	uint64_t off;
+	uint64_t off = 0;
 
 	WARN_ON(!mutex_is_locked(&dev->struct_mutex));
 
-	off = drm_vma_node_start(&obj->vma_node);
+	if (obj->map_list.map)
+		off = (uint64_t)obj->map_list.hash.key;
 
 	seq_printf(m, "%2d (%2d) %08llx %08Zx %p %d",
 			obj->name, obj->refcount.refcount.counter,

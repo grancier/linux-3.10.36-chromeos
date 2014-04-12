@@ -207,17 +207,15 @@ static int drm_addmap_core(struct drm_device * dev, resource_size_t offset,
 			return 0;
 		}
 
-		if (map->type == _DRM_FRAME_BUFFER ||
-		    (map->flags & _DRM_WRITE_COMBINING)) {
-			map->mtrr =
-				arch_phys_wc_add(map->offset, map->size);
+		if (drm_core_has_MTRR(dev)) {
+			if (map->type == _DRM_FRAME_BUFFER ||
+			    (map->flags & _DRM_WRITE_COMBINING)) {
+				map->mtrr = mtrr_add(map->offset, map->size,
+						     MTRR_TYPE_WRCOMB, 1);
+			}
 		}
 		if (map->type == _DRM_REGISTERS) {
-			if (map->flags & _DRM_WRITE_COMBINING)
-				map->handle = ioremap_wc(map->offset,
-							 map->size);
-			else
-				map->handle = ioremap(map->offset, map->size);
+			map->handle = ioremap(map->offset, map->size);
 			if (!map->handle) {
 				kfree(map);
 				return -ENOMEM;
@@ -453,7 +451,11 @@ int drm_rmmap_locked(struct drm_device *dev, struct drm_local_map *map)
 		iounmap(map->handle);
 		/* FALLTHROUGH */
 	case _DRM_FRAME_BUFFER:
-		arch_phys_wc_del(map->mtrr);
+		if (drm_core_has_MTRR(dev) && map->mtrr >= 0) {
+			int retcode;
+			retcode = mtrr_del(map->mtrr, map->offset, map->size);
+			DRM_DEBUG("mtrr_del=%d\n", retcode);
+		}
 		break;
 	case _DRM_SHM:
 		vfree(map->handle);

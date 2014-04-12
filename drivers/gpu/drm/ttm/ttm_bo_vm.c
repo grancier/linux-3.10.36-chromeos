@@ -33,13 +33,43 @@
 #include <ttm/ttm_module.h>
 #include <ttm/ttm_bo_driver.h>
 #include <ttm/ttm_placement.h>
-#include <drm/drm_vma_manager.h>
 #include <linux/mm.h>
 #include <linux/rbtree.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
 
 #define TTM_BO_VM_NUM_PREFAULT 16
+
+static struct ttm_buffer_object *ttm_bo_vm_lookup_rb(struct ttm_bo_device *bdev,
+						     unsigned long page_start,
+						     unsigned long num_pages)
+{
+	struct rb_node *cur = bdev->addr_space_rb.rb_node;
+	unsigned long cur_offset;
+	struct ttm_buffer_object *bo;
+	struct ttm_buffer_object *best_bo = NULL;
+
+	while (likely(cur != NULL)) {
+		bo = rb_entry(cur, struct ttm_buffer_object, vm_rb);
+		cur_offset = bo->vm_node->start;
+		if (page_start >= cur_offset) {
+			cur = cur->rb_right;
+			best_bo = bo;
+			if (page_start == cur_offset)
+				break;
+		} else
+			cur = cur->rb_left;
+	}
+
+	if (unlikely(best_bo == NULL))
+		return NULL;
+
+	if (unlikely((best_bo->vm_node->start + best_bo->num_pages) <
+		     (page_start + num_pages)))
+		return NULL;
+
+	return best_bo;
+}
 
 static int ttm_bo_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
@@ -116,9 +146,9 @@ static int ttm_bo_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	}
 
 	page_offset = ((address - vma->vm_start) >> PAGE_SHIFT) +
-	    drm_vma_node_start(&bo->vma_node) - vma->vm_pgoff;
+	    bo->vm_node->start - vma->vm_pgoff;
 	page_last = vma_pages(vma) +
-	    drm_vma_node_start(&bo->vma_node) - vma->vm_pgoff;
+	    bo->vm_node->start - vma->vm_pgoff;
 
 	if (unlikely(page_offset >= bo->num_pages)) {
 		retval = VM_FAULT_SIGBUS;
@@ -219,30 +249,6 @@ static const struct vm_operations_struct ttm_bo_vm_ops = {
 	.close = ttm_bo_vm_close
 };
 
-static struct ttm_buffer_object *ttm_bo_vm_lookup(struct ttm_bo_device *bdev,
-						  unsigned long offset,
-						  unsigned long pages)
-{
-	struct drm_vma_offset_node *node;
-	struct ttm_buffer_object *bo = NULL;
-
-	drm_vma_offset_lock_lookup(&bdev->vma_manager);
-
-	node = drm_vma_offset_lookup_locked(&bdev->vma_manager, offset, pages);
-	if (likely(node)) {
-		bo = container_of(node, struct ttm_buffer_object, vma_node);
-		if (!kref_get_unless_zero(&bo->kref))
-			bo = NULL;
-	}
-
-	drm_vma_offset_unlock_lookup(&bdev->vma_manager);
-
-	if (!bo)
-		pr_err("Could not find buffer object to map\n");
-
-	return bo;
-}
-
 int ttm_bo_mmap(struct file *filp, struct vm_area_struct *vma,
 		struct ttm_bo_device *bdev)
 {
@@ -250,9 +256,17 @@ int ttm_bo_mmap(struct file *filp, struct vm_area_struct *vma,
 	struct ttm_buffer_object *bo;
 	int ret;
 
-	bo = ttm_bo_vm_lookup(bdev, vma->vm_pgoff, vma_pages(vma));
-	if (unlikely(!bo))
+	read_lock(&bdev->vm_lock);
+	bo = ttm_bo_vm_lookup_rb(bdev, vma->vm_pgoff,
+				 vma_pages(vma));
+	if (likely(bo != NULL) && !kref_get_unless_zero(&bo->kref))
+		bo = NULL;
+	read_unlock(&bdev->vm_lock);
+
+	if (unlikely(bo == NULL)) {
+		pr_err("Could not find buffer object to map\n");
 		return -EINVAL;
+	}
 
 	driver = bo->bdev->driver;
 	if (unlikely(!driver->verify_access)) {
@@ -310,7 +324,12 @@ ssize_t ttm_bo_io(struct ttm_bo_device *bdev, struct file *filp,
 	bool no_wait = false;
 	bool dummy;
 
-	bo = ttm_bo_vm_lookup(bdev, dev_offset, 1);
+	read_lock(&bdev->vm_lock);
+	bo = ttm_bo_vm_lookup_rb(bdev, dev_offset, 1);
+	if (likely(bo != NULL))
+		ttm_bo_reference(bo);
+	read_unlock(&bdev->vm_lock);
+
 	if (unlikely(bo == NULL))
 		return -EFAULT;
 
@@ -324,7 +343,7 @@ ssize_t ttm_bo_io(struct ttm_bo_device *bdev, struct file *filp,
 	if (unlikely(ret != 0))
 		goto out_unref;
 
-	kmap_offset = dev_offset - drm_vma_node_start(&bo->vma_node);
+	kmap_offset = dev_offset - bo->vm_node->start;
 	if (unlikely(kmap_offset >= bo->num_pages)) {
 		ret = -EFBIG;
 		goto out_unref;

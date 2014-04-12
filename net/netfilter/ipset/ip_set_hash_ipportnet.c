@@ -128,20 +128,6 @@ hash_ipportnet4_data_netmask(struct hash_ipportnet4_elem *elem, u8 cidr)
 	elem->cidr = cidr - 1;
 }
 
-/**
- *  * nla_put_net16 - Add 16-bit network byte order netlink attribute to a socket buffer
- *  * @skb: socket buffer to add attribute to
- *  * @attrtype: attribute type
- *  * @value: numeric value
- *  */
-static inline int nla_put_net16(struct sk_buff *skb, int attrtype, __be16 value)
-{
-   
-           return nla_put_be16(skb, attrtype | NLA_F_NET_BYTEORDER, value);
-}
-
-
-
 static bool
 hash_ipportnet4_data_list(struct sk_buff *skb,
 			  const struct hash_ipportnet4_elem *data)

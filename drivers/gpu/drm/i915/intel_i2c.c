@@ -34,11 +34,6 @@
 #include <drm/i915_drm.h>
 #include "i915_drv.h"
 
-enum disp_clk {
-	CDCLK,
-	CZCLK
-};
-
 struct gmbus_port {
 	const char *name;
 	int reg;
@@ -63,69 +58,10 @@ to_intel_gmbus(struct i2c_adapter *i2c)
 	return container_of(i2c, struct intel_gmbus, adapter);
 }
 
-static int get_disp_clk_div(struct drm_i915_private *dev_priv,
-			    enum disp_clk clk)
-{
-	u32 reg_val;
-	int clk_ratio;
-
-	reg_val = I915_READ(CZCLK_CDCLK_FREQ_RATIO);
-
-	if (clk == CDCLK)
-		clk_ratio =
-			((reg_val & CDCLK_FREQ_MASK) >> CDCLK_FREQ_SHIFT) + 1;
-	else
-		clk_ratio = (reg_val & CZCLK_FREQ_MASK) + 1;
-
-	return clk_ratio;
-}
-
-static void gmbus_set_freq(struct drm_i915_private *dev_priv)
-{
-	int vco_freq[] = { 800, 1600, 2000, 2400 };
-	int gmbus_freq = 0, cdclk_div, hpll_freq;
-
-	BUG_ON(!IS_VALLEYVIEW(dev_priv->dev));
-
-	/* Skip setting the gmbus freq if BIOS has already programmed it */
-	if (I915_READ(GMBUSFREQ_VLV) != 0xA0)
-		return;
-
-	/* Obtain SKU information */
-	mutex_lock(&dev_priv->dpio_lock);
-	hpll_freq =
-		vlv_cck_read(dev_priv, CCK_FUSE_REG) & CCK_FUSE_HPLL_FREQ_MASK;
-	mutex_unlock(&dev_priv->dpio_lock);
-
-	/* Get the CDCLK divide ratio */
-	cdclk_div = get_disp_clk_div(dev_priv, CDCLK);
-
-	/*
-	 * Program the gmbus_freq based on the cdclk frequency.
-	 * BSpec erroneously claims we should aim for 4MHz, but
-	 * in fact 1MHz is the correct frequency.
-	 */
-	if (cdclk_div)
-		gmbus_freq = (vco_freq[hpll_freq] << 1) / cdclk_div;
-
-	if (WARN_ON(gmbus_freq == 0))
-		return;
-
-	I915_WRITE(GMBUSFREQ_VLV, gmbus_freq);
-}
-
 void
 intel_i2c_reset(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
-
-	/*
-	 * In BIOS-less system, program the correct gmbus frequency
-	 * before reading edid.
-	 */
-	if (IS_VALLEYVIEW(dev))
-		gmbus_set_freq(dev_priv);
-
 	I915_WRITE(dev_priv->gpio_mmio_base + GMBUS0, 0);
 	I915_WRITE(dev_priv->gpio_mmio_base + GMBUS4, 0);
 }
@@ -461,9 +397,7 @@ gmbus_xfer(struct i2c_adapter *adapter,
 	struct drm_i915_private *dev_priv = bus->dev_priv;
 	int i, reg_offset;
 	int ret = 0;
-	u32 gmbus0;
 
-	intel_aux_display_runtime_get(dev_priv);
 	mutex_lock(&dev_priv->gmbus_mutex);
 
 	if (bus->force_bit) {
@@ -473,16 +407,7 @@ gmbus_xfer(struct i2c_adapter *adapter,
 
 	reg_offset = dev_priv->gpio_mmio_base;
 
-	/* Hack to use 400kHz only for touch i2c devices on ddc ports */
-	gmbus0 = bus->reg0;
-	if (((gmbus0 & GMBUS_PORT_MASK) == GMBUS_PORT_VGADDC &&
-	     (msgs[0].addr == 0x4b || msgs[0].addr == 0x67 ||
-	      msgs[0].addr == 0x25)) ||
-	    ((gmbus0 & GMBUS_PORT_MASK) == GMBUS_PORT_PANEL &&
-	     (msgs[0].addr == 0x4a || msgs[0].addr == 0x26))) {
-		gmbus0 = (gmbus0 & ~GMBUS_RATE_MASK) | GMBUS_RATE_400KHZ;
-	}
-	I915_WRITE(GMBUS0 + reg_offset, gmbus0);
+	I915_WRITE(GMBUS0 + reg_offset, bus->reg0);
 
 	for (i = 0; i < num; i++) {
 		if (gmbus_is_index_read(msgs, i, num)) {
@@ -572,7 +497,6 @@ timeout:
 
 out:
 	mutex_unlock(&dev_priv->gmbus_mutex);
-	intel_aux_display_runtime_put(dev_priv);
 	return ret;
 }
 
@@ -688,29 +612,4 @@ void intel_teardown_gmbus(struct drm_device *dev)
 		struct intel_gmbus *bus = &dev_priv->gmbus[i];
 		i2c_del_adapter(&bus->adapter);
 	}
-}
-
-void intel_i2c_register(struct drm_device *dev,
-			struct drm_connector *connector,
-			int ddc_bus)
-{
-	struct drm_i915_private *dev_priv = dev->dev_private;
-	struct intel_connector *intel_connector = to_intel_connector(connector);
-	struct i2c_adapter *gmbus_adapter;
-	int error;
-	char name[48];
-
-	gmbus_adapter = intel_gmbus_get_adapter(dev_priv, ddc_bus);
-	if (!gmbus_adapter) {
-		DRM_ERROR("Cannot find i2c adapter\n");
-		return;
-	}
-
-	snprintf(name, sizeof(name), "i2c-%d", gmbus_adapter->nr);
-
-	error = sysfs_create_link(&intel_connector->base.kdev.kobj,
-				  &gmbus_adapter->dev.kobj, name);
-
-	if (error)
-		DRM_ERROR("Cannot create sysfs symlink (%d)\n", error);
 }
