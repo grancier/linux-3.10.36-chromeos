@@ -21,6 +21,7 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
+#include <linux/rndis.h>
 #include <linux/workqueue.h>
 #include <linux/slab.h>
 #include <linux/mii.h>
