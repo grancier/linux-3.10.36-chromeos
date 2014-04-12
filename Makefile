@@ -367,6 +367,13 @@ LINUXINCLUDE    := \
 		-Iinclude \
 		$(USERINCLUDE)
 
+
+ifneq ($(WIFIVERSION),)
+LINUXINCLUDE := -I$(srctree)/include/wireless$(WIFIVERSION) $(LINUXINCLUDE)
+endif
+
+
+
 KBUILD_CPPFLAGS := -D__KERNEL__
 
 KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
