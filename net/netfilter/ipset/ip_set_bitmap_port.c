@@ -84,6 +84,21 @@ bitmap_port_do_del(const struct bitmap_port_adt_elem *e,
 	return !test_and_clear_bit(e->id, map->members);
 }
 
+
+/**
+ *  * nla_put_net16 - Add 16-bit network byte order netlink attribute to a socket buffer
+ *  * @skb: socket buffer to add attribute to
+ *  * @attrtype: attribute type
+ *  * @value: numeric value
+ *  */
+static inline int nla_put_net16(struct sk_buff *skb, int attrtype, __be16 value)
+{
+   
+           return nla_put_be16(skb, attrtype | NLA_F_NET_BYTEORDER, value);
+}
+
+
+
 static inline int
 bitmap_port_do_list(struct sk_buff *skb, const struct bitmap_port *map, u32 id)
 {

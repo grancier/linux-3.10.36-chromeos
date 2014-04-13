@@ -228,6 +228,19 @@ ip_set_update_counter(struct ip_set_counter *counter,
 	}
 }
 
+/**
+ *  * nla_put_net64 - Add 64-bit network byte order netlink attribute to a socket buffer
+ *  * @skb: socket buffer to add attribute to
+ *  * @attrtype: attribute type
+ *  * @value: numeric value
+ *  */
+static inline int nla_put_net64(struct sk_buff *skb, int attrtype, __be64 value)
+{
+   
+           return nla_put_be64(skb, attrtype | NLA_F_NET_BYTEORDER, value);
+}
+
+
 static inline bool
 ip_set_put_counter(struct sk_buff *skb, struct ip_set_counter *counter)
 {
@@ -321,6 +334,19 @@ ip_set_get_h32(const struct nlattr *attr)
 {
 	return ntohl(nla_get_be32(attr));
 }
+
+/**
+ *  * nla_put_net32 - Add 32-bit network byte order netlink attribute to a socket buffer
+ *  * @skb: socket buffer to add attribute to
+ *  * @attrtype: attribute type
+ *  * @value: numeric value
+ *  */
+static inline int nla_put_net32(struct sk_buff *skb, int attrtype, __be32 value)
+{
+   
+           return nla_put_be32(skb, attrtype | NLA_F_NET_BYTEORDER, value);
+}
+
 
 static inline u16
 ip_set_get_h16(const struct nlattr *attr)

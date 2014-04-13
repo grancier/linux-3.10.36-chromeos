@@ -86,6 +86,21 @@ hash_ipportip4_data_equal(const struct hash_ipportip4_elem *ip1,
 	       ip1->proto == ip2->proto;
 }
 
+
+/**
+ *  * nla_put_net16 - Add 16-bit network byte order netlink attribute to a socket buffer
+ *  * @skb: socket buffer to add attribute to
+ *  * @attrtype: attribute type
+ *  * @value: numeric value
+ *  */
+static inline int nla_put_net16(struct sk_buff *skb, int attrtype, __be16 value)
+{
+   
+           return nla_put_be16(skb, attrtype | NLA_F_NET_BYTEORDER, value);
+}
+
+
+
 static bool
 hash_ipportip4_data_list(struct sk_buff *skb,
 		       const struct hash_ipportip4_elem *data)

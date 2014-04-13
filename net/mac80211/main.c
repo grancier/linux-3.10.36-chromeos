@@ -9,6 +9,7 @@
  */
 
 #include <net/mac80211.h>
+#include <linux/ieee80211.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/netdevice.h>

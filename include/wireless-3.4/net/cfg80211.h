@@ -918,7 +918,7 @@ struct cfg80211_scan_request {
 	u32 n_channels;
 	const u8 *ie;
 	size_t ie_len;
-
+        u32 flags;
 	u32 rates[IEEE80211_NUM_BANDS];
 
 	/* internal */
