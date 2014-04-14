@@ -40,7 +40,7 @@ int led_blink;
 module_param_named(blink, led_blink, int, 0444);
 MODULE_PARM_DESC(blink, "Enable LED blink on activity");
 
-static int ath9k_btcoex_enable;
+static int ath9k_btcoex_enable = 1;
 module_param_named(btcoex_enable, ath9k_btcoex_enable, int, 0444);
 MODULE_PARM_DESC(btcoex_enable, "Enable wifi-BT coexistence");
 
@@ -273,8 +273,8 @@ static void setup_ht_cap(struct ath_softc *sc,
 
 	/* set up supported mcs set */
 	memset(&ht_info->mcs, 0, sizeof(ht_info->mcs));
-	tx_streams = ath9k_cmn_count_streams(ah->txchainmask, max_streams);
-	rx_streams = ath9k_cmn_count_streams(ah->rxchainmask, max_streams);
+	tx_streams = ath9k_btcoex_ath9k_cmn_count_streams(ah->txchainmask, max_streams);
+	rx_streams = ath9k_btcoex_ath9k_cmn_count_streams(ah->rxchainmask, max_streams);
 
 	ath_dbg(common, CONFIG, "TX streams %d, RX streams: %d\n",
 		tx_streams, rx_streams);
@@ -306,7 +306,7 @@ static int ath9k_reg_notifier(struct wiphy *wiphy,
 	if (ah->curchan) {
 		sc->config.txpowlimit = 2 * ah->curchan->chan->max_power;
 		ath9k_ps_wakeup(sc);
-		ath9k_hw_set_txpowerlimit(ah, sc->config.txpowlimit, false);
+		ath9k_btcoex_ath9k_hw_set_txpowerlimit(ah, sc->config.txpowlimit, false);
 		sc->curtxpow = ath9k_hw_regulatory(ah)->power_limit;
 		ath9k_ps_restore(sc);
 	}
@@ -423,7 +423,7 @@ static int ath9k_init_queues(struct ath_softc *sc)
 {
 	int i = 0;
 
-	sc->beacon.beaconq = ath9k_hw_beaconq_setup(sc->sc_ah);
+	sc->beacon.beaconq = ath9k_btcoex_ath9k_hw_beaconq_setup(sc->sc_ah);
 	sc->beacon.cabq = ath_txq_setup(sc, ATH9K_TX_QUEUE_CAB, 0);
 
 	sc->config.cabqReadytime = ATH_CABQ_READY_TIME;
@@ -487,6 +487,7 @@ static void ath9k_init_misc(struct ath_softc *sc)
 
 	setup_timer(&common->ani.timer, ath_ani_calibrate, (unsigned long)sc);
 
+	sc->last_rssi = ATH_RSSI_DUMMY_MARKER;
 	sc->config.txpowlimit = ATH_TXPOWER_MAX;
 	memcpy(common->bssidmask, ath_bcast_mac, ETH_ALEN);
 	sc->beacon.slottime = ATH9K_SLOT_TIME_9;
@@ -553,8 +554,14 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	spin_lock_init(&sc->debug.samp_lock);
 #endif
 	tasklet_init(&sc->intr_tq, ath9k_tasklet, (unsigned long)sc);
-	tasklet_init(&sc->bcon_tasklet, ath_beacon_tasklet,
+	tasklet_init(&sc->bcon_tasklet, ath9k_beacon_tasklet,
 		     (unsigned long)sc);
+
+	INIT_WORK(&sc->hw_reset_work, ath_reset_work);
+	INIT_WORK(&sc->hw_check_work, ath_hw_check);
+	INIT_WORK(&sc->paprd_work, ath_paprd_calibrate);
+	INIT_DELAYED_WORK(&sc->hw_pll_work, ath_hw_pll_work);
+	setup_timer(&sc->rx_poll_timer, ath_rx_poll_work, (unsigned long)sc);
 
 	/*
 	 * Cache line size is used to size and align various
@@ -564,7 +571,7 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	common->cachelsz = csz << 2; /* convert to bytes */
 
 	/* Initializes the hardware for all supported chipsets */
-	ret = ath9k_hw_init(ah);
+	ret = ath9k_btcoex_ath9k_hw_init(ah);
 	if (ret)
 		goto err_hw;
 
@@ -583,8 +590,11 @@ static int ath9k_init_softc(u16 devid, struct ath_softc *sc,
 	if (ret)
 		goto err_btcoex;
 
-	ath9k_cmn_init_crypto(sc->sc_ah);
+	ath9k_btcoex_ath9k_cmn_init_crypto(sc->sc_ah);
 	ath9k_init_misc(sc);
+
+	if (common->bus_ops->aspm_init)
+		common->bus_ops->aspm_init(common);
 
 	return 0;
 
@@ -593,7 +603,7 @@ err_btcoex:
 		if (ATH_TXQ_SETUP(sc, i))
 			ath_tx_cleanupq(sc, &sc->tx.txq[i]);
 err_queues:
-	ath9k_hw_deinit(ah);
+	ath9k_btcoex_ath9k_hw_deinit(ah);
 err_hw:
 
 	kfree(ah);
@@ -613,8 +623,8 @@ static void ath9k_init_band_txpower(struct ath_softc *sc, int band)
 	for (i = 0; i < sband->n_channels; i++) {
 		chan = &sband->channels[i];
 		ah->curchan = &ah->channels[chan->hw_value];
-		ath9k_cmn_update_ichannel(ah->curchan, chan, NL80211_CHAN_HT20);
-		ath9k_hw_set_txpowerlimit(ah, MAX_RATE_POWER, true);
+		ath9k_btcoex_ath9k_cmn_update_ichannel(ah->curchan, chan, NL80211_CHAN_HT20);
+		ath9k_btcoex_ath9k_hw_set_txpowerlimit(ah, MAX_RATE_POWER, true);
 	}
 }
 
@@ -642,6 +652,24 @@ void ath9k_reload_chainmask_settings(struct ath_softc *sc)
 		setup_ht_cap(sc, &sc->sbands[IEEE80211_BAND_5GHZ].ht_cap);
 }
 
+static const struct ieee80211_iface_limit if_limits[] = {
+	{ .max = 2048,	.types = BIT(NL80211_IFTYPE_STATION) |
+				 BIT(NL80211_IFTYPE_P2P_CLIENT) |
+				 BIT(NL80211_IFTYPE_WDS) },
+	{ .max = 8,	.types =
+#ifdef CONFIG_MAC80211_MESH
+				 BIT(NL80211_IFTYPE_MESH_POINT) |
+#endif
+				 BIT(NL80211_IFTYPE_AP) |
+				 BIT(NL80211_IFTYPE_P2P_GO) },
+};
+
+static const struct ieee80211_iface_combination if_comb = {
+	.limits = if_limits,
+	.n_limits = ARRAY_SIZE(if_limits),
+	.max_interfaces = 2048,
+	.num_different_channels = 1,
+};
 
 void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
 {
@@ -671,7 +699,11 @@ void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
 		BIT(NL80211_IFTYPE_ADHOC) |
 		BIT(NL80211_IFTYPE_MESH_POINT);
 
-	hw->wiphy->flags &= ~WIPHY_FLAG_PS_ON_BY_DEFAULT;
+	hw->wiphy->iface_combinations = &if_comb;
+	hw->wiphy->n_iface_combinations = 1;
+
+	if (AR_SREV_5416(sc->sc_ah))
+		hw->wiphy->flags &= ~WIPHY_FLAG_PS_ON_BY_DEFAULT;
 
 	hw->wiphy->flags |= WIPHY_FLAG_IBSS_RSN;
 	hw->wiphy->flags |= WIPHY_FLAG_SUPPORTS_TDLS;
@@ -693,6 +725,10 @@ void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
 
 	sc->ant_rx = hw->wiphy->available_antennas_rx;
 	sc->ant_tx = hw->wiphy->available_antennas_tx;
+
+#ifdef CONFIG_ATH9K_RATE_CONTROL
+	hw->rate_control_algorithm = "ath9k_btcoex_rate_cotnrol";
+#endif
 
 	if (sc->sc_ah->caps.hw_caps & ATH9K_HW_CAP_2GHZ)
 		hw->wiphy->bands[IEEE80211_BAND_2GHZ] =
@@ -750,11 +786,6 @@ int ath9k_init_device(u16 devid, struct ath_softc *sc,
 		IEEE80211_TPT_LEDTRIG_FL_RADIO, ath9k_tpt_blink,
 		ARRAY_SIZE(ath9k_tpt_blink));
 #endif
-
-	INIT_WORK(&sc->hw_reset_work, ath_reset_work);
-	INIT_WORK(&sc->hw_check_work, ath_hw_check);
-	INIT_WORK(&sc->paprd_work, ath_paprd_calibrate);
-	INIT_DELAYED_WORK(&sc->hw_pll_work, ath_hw_pll_work);
 
 	/* Register with mac80211 */
 	error = ieee80211_register_hw(hw);
@@ -815,7 +846,7 @@ static void ath9k_deinit_softc(struct ath_softc *sc)
 		if (ATH_TXQ_SETUP(sc, i))
 			ath_tx_cleanupq(sc, &sc->tx.txq[i]);
 
-	ath9k_hw_deinit(sc->sc_ah);
+	ath9k_btcoex_ath9k_hw_deinit(sc->sc_ah);
 
 	kfree(sc->sc_ah);
 	sc->sc_ah = NULL;
@@ -853,9 +884,6 @@ void ath_descdma_cleanup(struct ath_softc *sc,
 /************************/
 /*     Module Hooks     */
 /************************/
-
-int ath_rate_control_register(void);
-void ath_rate_control_unregister(void);
 
 static int __init ath9k_init(void)
 {

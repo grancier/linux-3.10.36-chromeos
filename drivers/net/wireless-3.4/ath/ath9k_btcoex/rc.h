@@ -218,8 +218,8 @@ struct ath_rate_priv {
 	struct dentry *debugfs_rcstats;
 	struct ath_rc_stats rcstats[RATE_TABLE_SIZE];
 };
-/*
-#ifdef CONFIG_ATH9K_LEGACY_RATE_CONTROL
+
+#ifdef CONFIG_ATH9K_RATE_CONTROL
 int ath_rate_control_register(void);
 void ath_rate_control_unregister(void);
 #else
@@ -232,5 +232,5 @@ static inline void ath_rate_control_unregister(void)
 {
 }
 #endif
-*/
+
 #endif /* RC_H */
