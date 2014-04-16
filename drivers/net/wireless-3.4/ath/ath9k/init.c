@@ -854,9 +854,6 @@ void ath_descdma_cleanup(struct ath_softc *sc,
 /*     Module Hooks     */
 /************************/
 
-int ath_rate_control_register(void);
-void ath_rate_control_unregister(void);
-
 static int __init ath9k_init(void)
 {
 	int error;
