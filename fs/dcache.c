@@ -2729,16 +2729,19 @@ char *dynamic_dname(struct dentry *dentry, char *buffer, int buflen,
 	return memcpy(buffer, temp, sz);
 }
 
+
 char *simple_dname(struct dentry *dentry, char *buffer, int buflen)
 {
-	char *end = buffer + buflen;
-	/* these dentries are never renamed, so d_lock is not needed */
-	if (prepend(&end, &buflen, " (deleted)", 11) ||
-	    prepend_name(&end, &buflen, &dentry->d_name) ||
-	    prepend(&end, &buflen, "/", 1))
-		end = ERR_PTR(-ENAMETOOLONG);
-	return end;
+              char *end = buffer + buflen;
+           /* these dentries are never renamed, so d_lock is not needed */
+           if (prepend(&end, &buflen, " (deleted)", 11) ||
+	                   prepend(&end, &buflen, dentry->d_name.name, dentry->d_name.len) ||
+	                   prepend(&end, &buflen, "/", 1))
+                     end = ERR_PTR(-ENAMETOOLONG);
+           return end;
 }
+EXPORT_SYMBOL(simple_dname);
+
 
 /*
  * Write full pathname from the root of the filesystem into the buffer.

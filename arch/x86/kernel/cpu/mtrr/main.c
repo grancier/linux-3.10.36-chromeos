@@ -46,7 +46,7 @@
 #include <linux/pci.h>
 #include <linux/smp.h>
 #include <linux/syscore_ops.h>
-
+#include <asm/pat.h>
 #include <asm/processor.h>
 #include <asm/e820.h>
 #include <asm/mtrr.h>
@@ -54,6 +54,7 @@
 
 #include "mtrr.h"
 
+#define MTRR_TO_PHYS_WC_OFFSET 1000
 u32 num_var_ranges;
 
 unsigned int mtrr_usage_table[MTRR_MAX_VAR_RANGES];
@@ -744,6 +745,57 @@ void mtrr_bp_restore(void)
 
 	mtrr_if->set_all();
 }
+
+
+/**
+ * arch_phys_wc_add - add a WC MTRR and handle errors if PAT is unavailable
+ * @base: Physical base address
+ * @size: Size of region
+ *
+ * If PAT is available, this does nothing.  If PAT is unavailable, it
+ * attempts to add a WC MTRR covering size bytes starting at base and
+ * logs an error if this fails.
+ *
+ * Drivers must store the return value to pass to mtrr_del_wc_if_needed,
+ * but drivers should not try to interpret that return value.
+ */
+int arch_phys_wc_add(unsigned long base, unsigned long size)
+{
+        int ret;
+
+        if (pat_enabled)
+                return 0;  /* Success!  (We don't need to do anything.) */
+
+        ret = mtrr_add(base, size, MTRR_TYPE_WRCOMB, true);
+        if (ret < 0) {
+                pr_warn("Failed to add WC MTRR for [%p-%p]; performance may suffer.",
+                        (void *)base, (void *)(base + size - 1));
+                return ret;
+        }
+        return ret + MTRR_TO_PHYS_WC_OFFSET;
+}
+EXPORT_SYMBOL(arch_phys_wc_add);
+
+
+/*
+ * arch_phys_wc_del - undoes arch_phys_wc_add
+ * @handle: Return value from arch_phys_wc_add
+ *
+ * This cleans up after mtrr_add_wc_if_needed.
+ *
+ * The API guarantees that mtrr_del_wc_if_needed(error code) and
+ * mtrr_del_wc_if_needed(0) do nothing.
+ */
+void arch_phys_wc_del(int handle)
+{
+        if (handle >= 1) {
+                WARN_ON(handle < MTRR_TO_PHYS_WC_OFFSET);
+                mtrr_del(handle - MTRR_TO_PHYS_WC_OFFSET, 0, 0);
+        }
+}
+EXPORT_SYMBOL(arch_phys_wc_del);
+
+
 
 static int __init mtrr_init_finialize(void)
 {
